@@ -108,7 +108,29 @@ def dividir_capitulos(texto):
 
     return capitulos
 
+def extrair_sumario(texto):
+    linhas = texto.split('\n')
 
+    sumario = []
+    encontrou = False
+
+    for linha in linhas:
+        linha = linha.strip()
+
+        # Detecta início
+        if re.search(r'sum[áa]rio|índice', linha, re.IGNORECASE):
+            encontrou = True
+            continue
+
+        if encontrou:
+            if re.search(r'cap[ií]tulo|parte', linha, re.IGNORECASE):
+                sumario.append(linha)
+
+            elif linha == "":
+                break
+
+    return sumario
+    
 # ---------------- GERAÇÃO DO ZIP ---------------- #
 async def gerar_zip(texto, voz, titulo, autor, ano):
     capitulos = dividir_capitulos(texto)
@@ -173,12 +195,30 @@ if st.button("🚀 Gerar Audiobook para Download"):
     elif not titulo or not autor:
         st.warning("Preencha título e autor.")
     else:
-        texto = extrair_texto(arquivo)
+texto = extrair_texto(arquivo)
 
-        if not texto.strip():
-            st.error("Não foi possível extrair texto do arquivo.")
-        else:
-            st.info("Convertendo... isso pode levar alguns minutos.")
+if not texto.strip():
+    st.error("Não foi possível extrair texto do arquivo.")
+else:
+    # 🔹 NOVO: detectar sumário
+    sumario = extrair_sumario(texto)
+
+    if sumario:
+        st.write("📑 Sumário detectado:")
+        for linha in sumario[:10]:
+            st.write(linha)
+    else:
+        st.write("📑 Nenhum sumário detectado.")
+
+    # 🔹 Preview de capítulos
+    capitulos_preview = dividir_capitulos(texto)
+
+    st.write(f"📚 Capítulos detectados: {len(capitulos_preview)}")
+
+    for i, (tit, _) in enumerate(capitulos_preview[:5], 1):
+        st.write(f"{i}. {tit}")
+
+    st.info("Convertendo... isso pode levar alguns minutos.")
 
             try:
                 zip_data = asyncio.run(
