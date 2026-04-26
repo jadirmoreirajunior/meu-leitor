@@ -52,19 +52,59 @@ def extrair_texto(arquivo):
 
 # ---------------- DIVISÃO DE CAPÍTULOS ---------------- #
 def dividir_capitulos(texto):
-    blocos = re.split(r'(Cap[ií]tulo\s+\d+|CAP[IÍ]TULO\s+\d+)', texto)
+    # Normaliza quebras
+    texto = texto.replace('\r', '\n')
+
+    # 🔹 Padrões mais completos
+    padrao = re.compile(
+        r'\n\s*(CAP[IÍ]TULO\s+\d+|Cap[ií]tulo\s+\d+|'
+        r'PARTE\s+\d+|Parte\s+\d+|'
+        r'CAP[IÍ]TULO\s+[IVXLCDM]+|Cap[ií]tulo\s+[IVXLCDM]+|'
+        r'PARTE\s+[IVXLCDM]+|Parte\s+[IVXLCDM]+)\s*\n',
+        re.IGNORECASE
+    )
+
+    partes = padrao.split(texto)
 
     capitulos = []
 
-    if len(blocos) < 2:
-        capitulos.append(("Texto completo", texto))
-    else:
-        for i in range(1, len(blocos), 2):
-            titulo = blocos[i]
-            conteudo = blocos[i+1] if i+1 < len(blocos) else ""
+    # 🔹 Caso encontrou capítulos formais
+    if len(partes) > 2:
+        for i in range(1, len(partes), 2):
+            titulo = partes[i].strip()
+            conteudo = partes[i+1].strip() if i+1 < len(partes) else ""
 
-            if len(conteudo.strip()) > 100:
+            if len(conteudo) > 300:
                 capitulos.append((titulo, conteudo))
+
+    # 🔹 FALLBACK (muito importante!)
+    else:
+        st.warning("⚠️ Não encontrei capítulos claros. Dividindo automaticamente...")
+
+        tamanho_max = 5000  # caracteres por bloco
+        texto_limpo = texto.strip()
+
+        blocos = []
+        inicio = 0
+
+        while inicio < len(texto_limpo):
+            fim = inicio + tamanho_max
+
+            # tenta quebrar em ponto final próximo
+            trecho = texto_limpo[inicio:fim]
+            ultimo_ponto = trecho.rfind('.')
+
+            if ultimo_ponto != -1 and ultimo_ponto > 1000:
+                fim = inicio + ultimo_ponto + 1
+
+            bloco = texto_limpo[inicio:fim].strip()
+            if bloco:
+                blocos.append(bloco)
+
+            inicio = fim
+
+        for i, bloco in enumerate(blocos, 1):
+            capitulos.append((f"Parte {i}", bloco))
 
     return capitulos
 
