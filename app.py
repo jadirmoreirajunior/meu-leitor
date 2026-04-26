@@ -195,30 +195,30 @@ if st.button("🚀 Gerar Audiobook para Download"):
     elif not titulo or not autor:
         st.warning("Preencha título e autor.")
     else:
-texto = extrair_texto(arquivo)
+        texto = extrair_texto(arquivo)
 
-if not texto.strip():
-    st.error("Não foi possível extrair texto do arquivo.")
-else:
-    # 🔹 NOVO: detectar sumário
-    sumario = extrair_sumario(texto)
+        if not texto.strip():
+            st.error("Não foi possível extrair texto do arquivo.")
+        else:
+            # 🔹 Detectar sumário
+            sumario = extrair_sumario(texto)
 
-    if sumario:
-        st.write("📑 Sumário detectado:")
-        for linha in sumario[:10]:
-            st.write(linha)
-    else:
-        st.write("📑 Nenhum sumário detectado.")
+            if sumario:
+                st.write("📑 Sumário detectado:")
+                for linha in sumario[:10]:
+                    st.write(linha)
+            else:
+                st.write("📑 Nenhum sumário detectado.")
 
-    # 🔹 Preview de capítulos
-    capitulos_preview = dividir_capitulos(texto)
+            # 🔹 Preview de capítulos
+            capitulos_preview = dividir_capitulos(texto)
 
-    st.write(f"📚 Capítulos detectados: {len(capitulos_preview)}")
+            st.write(f"📚 Capítulos detectados: {len(capitulos_preview)}")
 
-    for i, (tit, _) in enumerate(capitulos_preview[:5], 1):
-        st.write(f"{i}. {tit}")
+            for i, (tit, _) in enumerate(capitulos_preview[:5], 1):
+                st.write(f"{i}. {tit}")
 
-    st.info("Convertendo... isso pode levar alguns minutos.")
+            st.info("Convertendo... isso pode levar alguns minutos.")
 
             try:
                 zip_data = asyncio.run(
