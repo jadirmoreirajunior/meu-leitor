@@ -33,7 +33,6 @@ def extrair_texto(arquivo):
             if t:
                 textos.append(t)
         return "\n".join(textos)
-
     else:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
             tmp.write(arquivo.getvalue())
@@ -50,12 +49,75 @@ def extrair_texto(arquivo):
         return texto
 
 
-# ---------------- DIVISÃO DE CAPÍTULOS ---------------- #
+# ---------------- SUMÁRIO ---------------- #
+def extrair_sumario(texto):
+    linhas = texto.split('\n')
+    sumario = []
+    encontrou = False
+
+    for linha in linhas:
+        linha_limpa = linha.strip()
+
+        if re.search(r'sum[áa]rio|índice', linha_limpa, re.IGNORECASE):
+            encontrou = True
+            continue
+
+        if encontrou:
+            if len(linha_limpa) > 80:
+                break
+
+            if not linha_limpa:
+                continue
+
+            if 3 < len(linha_limpa) < 60:
+                sumario.append(linha_limpa)
+
+            if len(sumario) > 100:
+                break
+
+    return sumario
+
+
+# ---------------- DIVISÃO POR SUMÁRIO ---------------- #
+def dividir_por_sumario(texto, sumario):
+    capitulos = []
+    texto_lower = texto.lower()
+
+    posicoes = []
+
+    for item in sumario:
+        item_limpo = item.strip().lower()
+        pos = texto_lower.find(item_limpo)
+
+        if pos != -1:
+            posicoes.append((pos, item.strip()))
+
+    posicoes.sort()
+
+    if len(posicoes) < 3:
+        return []
+
+    for i in range(len(posicoes)):
+        inicio = posicoes[i][0]
+        titulo = posicoes[i][1]
+
+        if i + 1 < len(posicoes):
+            fim = posicoes[i + 1][0]
+        else:
+            fim = len(texto)
+
+        conteudo = texto[inicio:fim].strip()
+
+        if len(conteudo) > 200:
+            capitulos.append((titulo, conteudo))
+
+    return capitulos
+
+
+# ---------------- DIVISÃO POR PADRÃO ---------------- #
 def dividir_capitulos(texto):
-    # Normaliza quebras
     texto = texto.replace('\r', '\n')
 
-    # 🔹 Padrões mais completos
     padrao = re.compile(
         r'\n\s*(CAP[IÍ]TULO\s+\d+|Cap[ií]tulo\s+\d+|'
         r'PARTE\s+\d+|Parte\s+\d+|'
@@ -65,10 +127,8 @@ def dividir_capitulos(texto):
     )
 
     partes = padrao.split(texto)
-
     capitulos = []
 
-    # 🔹 Caso encontrou capítulos formais
     if len(partes) > 2:
         for i in range(1, len(partes), 2):
             titulo = partes[i].strip()
@@ -77,63 +137,62 @@ def dividir_capitulos(texto):
             if len(conteudo) > 300:
                 capitulos.append((titulo, conteudo))
 
-    # 🔹 FALLBACK (muito importante!)
     else:
         st.warning("⚠️ Não encontrei capítulos claros. Dividindo automaticamente...")
 
-        tamanho_max = 5000  # caracteres por bloco
+        tamanho_max = 5000
         texto_limpo = texto.strip()
 
-        blocos = []
         inicio = 0
+        i = 1
 
         while inicio < len(texto_limpo):
             fim = inicio + tamanho_max
-
-            # tenta quebrar em ponto final próximo
             trecho = texto_limpo[inicio:fim]
-            ultimo_ponto = trecho.rfind('.')
 
+            ultimo_ponto = trecho.rfind('.')
             if ultimo_ponto != -1 and ultimo_ponto > 1000:
                 fim = inicio + ultimo_ponto + 1
 
             bloco = texto_limpo[inicio:fim].strip()
+
             if bloco:
-                blocos.append(bloco)
+                capitulos.append((f"Parte {i}", bloco))
+                i += 1
 
             inicio = fim
 
-        for i, bloco in enumerate(blocos, 1):
-            capitulos.append((f"Parte {i}", bloco))
-
     return capitulos
 
-def extrair_sumario(texto):
-    linhas = texto.split('\n')
 
-    sumario = []
-    encontrou = False
+# ---------------- ESCOLHA INTELIGENTE ---------------- #
+def dividir_inteligente(texto):
+    sumario = extrair_sumario(texto)
 
-    for linha in linhas:
-        linha = linha.strip()
+    capitulos = dividir_por_sumario(texto, sumario)
 
-        # Detecta início
-        if re.search(r'sum[áa]rio|índice', linha, re.IGNORECASE):
-            encontrou = True
-            continue
+    if capitulos:
+        return capitulos, "sumario"
 
-        if encontrou:
-            if re.search(r'cap[ií]tulo|parte', linha, re.IGNORECASE):
-                sumario.append(linha)
+    capitulos = dividir_capitulos(texto)
 
-            elif linha == "":
-                break
+    if capitulos:
+        return capitulos, "padrao"
 
-    return sumario
-    
+    return [], "erro"
+
+
 # ---------------- GERAÇÃO DO ZIP ---------------- #
 async def gerar_zip(texto, voz, titulo, autor, ano):
-    capitulos = dividir_capitulos(texto)
+    capitulos, metodo = dividir_inteligente(texto)
+
+    if metodo == "sumario":
+        st.success(f"✅ Divisão por SUMÁRIO ({len(capitulos)} capítulos)")
+    elif metodo == "padrao":
+        st.warning(f"⚠️ Divisão por padrão ({len(capitulos)} partes)")
+    else:
+        st.error("❌ Não foi possível dividir o texto")
+        return None
 
     zip_buffer = io.BytesIO()
 
@@ -150,15 +209,13 @@ async def gerar_zip(texto, voz, titulo, autor, ano):
                 communicate = edge_tts.Communicate(f"{tit}. {cont}", VOZES[voz])
                 await communicate.save(caminho_tmp)
             except Exception as e:
-                st.error(f"Erro ao gerar áudio no capítulo {num}: {e}")
+                st.error(f"Erro no capítulo {num}: {e}")
                 continue
 
-            # Verifica se o áudio foi gerado
             if not os.path.exists(caminho_tmp) or os.path.getsize(caminho_tmp) == 0:
                 st.warning(f"Áudio vazio no capítulo {num}")
                 continue
 
-            # Metadados
             try:
                 audio = ID3()
                 audio.add(TIT2(encoding=3, text=f"{titulo} - Parte {num}"))
@@ -168,8 +225,8 @@ async def gerar_zip(texto, voz, titulo, autor, ano):
                 if ano:
                     audio.add(TYER(encoding=3, text=ano))
                 audio.save(caminho_tmp)
-            except Exception as e:
-                st.warning(f"Erro ao adicionar metadados: {e}")
+            except:
+                pass
 
             zip_file.write(caminho_tmp, f"{num}.mp3")
             os.unlink(caminho_tmp)
@@ -198,41 +255,26 @@ if st.button("🚀 Gerar Audiobook para Download"):
         texto = extrair_texto(arquivo)
 
         if not texto.strip():
-            st.error("Não foi possível extrair texto do arquivo.")
+            st.error("Erro ao extrair texto.")
         else:
-            # 🔹 Detectar sumário
-            sumario = extrair_sumario(texto)
+            capitulos, metodo = dividir_inteligente(texto)
 
-            if sumario:
-                st.write("📑 Sumário detectado:")
-                for linha in sumario[:10]:
-                    st.write(linha)
-            else:
-                st.write("📑 Nenhum sumário detectado.")
+            st.write(f"📚 Método detectado: {metodo}")
+            st.write(f"📊 Capítulos detectados: {len(capitulos)}")
 
-            # 🔹 Preview de capítulos
-            capitulos_preview = dividir_capitulos(texto)
-
-            st.write(f"📚 Capítulos detectados: {len(capitulos_preview)}")
-
-            for i, (tit, _) in enumerate(capitulos_preview[:5], 1):
+            for i, (tit, _) in enumerate(capitulos[:5], 1):
                 st.write(f"{i}. {tit}")
 
-            st.info("Convertendo... isso pode levar alguns minutos.")
+            st.info("Convertendo... aguarde.")
 
-            try:
-                zip_data = asyncio.run(
-                    gerar_zip(texto, voz_sel, titulo, autor, ano)
-                )
+            zip_data = asyncio.run(
+                gerar_zip(texto, voz_sel, titulo, autor, ano)
+            )
 
-                st.success("Conversão concluída!")
-
+            if zip_data:
                 st.download_button(
                     label="⬇️ Baixar Audiobook (.zip)",
                     data=zip_data.getvalue(),
                     file_name=f"{titulo.replace(' ', '_')}.zip",
                     mime="application/zip"
                 )
-
-            except Exception as e:
-                st.error(f"Erro geral: {e}")
