@@ -4,3 +4,4 @@ PyPDF2
 ebooklib
 beautifulsoup4
 mutagen
+gTTS
