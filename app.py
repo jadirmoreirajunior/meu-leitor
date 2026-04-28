@@ -5,15 +5,11 @@ import asyncio
 import edge_tts
 import zipfile
 import io
-import nest_asyncio
 from PyPDF2 import PdfReader
 from ebooklib import epub
 import ebooklib
 from bs4 import BeautifulSoup
 import tempfile
-
-# Aplica nest_asyncio para resolver problemas de event loop
-nest_asyncio.apply()
 
 st.set_page_config(page_title="Audiobook Cloud", page_icon="☁️")
 
@@ -26,381 +22,181 @@ VOZES = {
     "Fabio (Madura - Masc)": "pt-BR-FabioNeural"
 }
 
+# ---------------- LIMPEZA DE TEXTO ---------------- #
+def limpar_texto(t):
+    # Remove caracteres especiais invisíveis e espaços excessivos
+    t = t.replace('\xa0', ' ').replace('\u200b', '').replace('\r', '\n')
+    t = re.sub(r'\n+', '\n', t)
+    return t.strip()
+
 # ---------------- EXTRAÇÃO DE TEXTO ---------------- #
 def extrair_texto(arquivo):
-    try:
-        if arquivo.name.endswith('.pdf'):
-            reader = PdfReader(arquivo)
-            textos = []
-            for p in reader.pages:
-                t = p.extract_text()
-                if t:
-                    textos.append(t)
-            return "\n".join(textos)
-        else:  # EPUB
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
-                tmp.write(arquivo.getvalue())
-                tmp_path = tmp.name
+    texto = ""
+    if arquivo.name.endswith('.pdf'):
+        reader = PdfReader(arquivo)
+        textos = []
+        for p in reader.pages:
+            t = p.extract_text()
+            if t: textos.append(t)
+        texto = "\n".join(textos)
+    else:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
+            tmp.write(arquivo.getvalue())
+            tmp_path = tmp.name
+        
+        livro = epub.read_epub(tmp_path)
+        for item in livro.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+            soup = BeautifulSoup(item.get_content(), 'html.parser')
+            texto += soup.get_text(separator=' ') + "\n"
+        
+        os.unlink(tmp_path)
+    
+    return limpar_texto(texto)
 
-            livro = epub.read_epub(tmp_path)
-            texto = ""
-
-            for item in livro.get_items():
-                if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                    soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    texto += soup.get_text(separator='\n') + "\n"
-
-            os.unlink(tmp_path)
-            return texto
-    except Exception as e:
-        st.error(f"Erro na extração do texto: {str(e)}")
-        return ""
-
-# ---------------- SUMÁRIO MELHORADO ---------------- #
+# ---------------- SUMÁRIO E DIVISÃO ---------------- #
 def extrair_sumario(texto):
     linhas = texto.split('\n')
     sumario = []
     encontrou = False
-    count_sumario = 0
-    
-    # Padrões mais flexíveis para identificar sumário
-    padroes_sumario = [
-        r'sum[áa]rio', r'índice', r'conteúdo', 
-        r'contents?', r'table of contents'
-    ]
-    
-    for i, linha in enumerate(linhas):
+    for linha in linhas:
         linha = linha.strip()
-        
-        # Verifica se é início do sumário
-        if not encontrou:
-            for padrao in padroes_sumario:
-                if re.search(padrao, linha, re.IGNORECASE):
-                    encontrou = True
-                    break
+        if re.search(r'sum[áa]rio|índice', linha, re.IGNORECASE):
+            encontrou = True
             continue
-        
-        # Fim do sumário (marcadores comuns)
         if encontrou:
-            # Verifica se chegou ao fim do sumário
-            if count_sumario > 5 and (len(linha) > 100 or re.match(r'^[IVXLCDM]+\.', linha)):
-                break
-            
-            # Pula linhas vazias
-            if not linha:
-                if count_sumario > 0:
-                    continue
-                else:
-                    continue
-            
-            # Filtra possíveis entradas de sumário
-            if len(linha) > 5 and len(linha) < 100:
-                # Remove números de página no final
-                linha = re.sub(r'\s+\.{2,}\s+\d+$', '', linha)
-                linha = re.sub(r'\s+\d+$', '', linha)
-                sumario.append(linha)
-                count_sumario += 1
-            
-            # Limite de itens
-            if len(sumario) >= 50:
-                break
-    
+            if len(linha) > 80: break
+            if not linha: continue
+            if 3 < len(linha) < 60: sumario.append(linha)
+            if len(sumario) > 100: break
     return sumario
 
-# ---------------- DIVISÃO POR SUMÁRIO ---------------- #
 def dividir_por_sumario(texto, sumario):
-    if len(sumario) < 2:
-        return []
-    
     capitulos = []
     texto_lower = texto.lower()
     posicoes = []
-
     for item in sumario:
-        # Busca de forma mais flexível
         pos = texto_lower.find(item.lower())
-        if pos == -1:
-            # Tenta buscar apenas a primeira palavra
-            primeira_palavra = item.split()[0].lower() if item.split() else ""
-            if primeira_palavra:
-                pos = texto_lower.find(primeira_palavra)
-        
-        if pos != -1:
-            posicoes.append((pos, item))
-
-    if not posicoes:
-        return []
+        if pos != -1: posicoes.append((pos, item))
     
     posicoes.sort()
-    
-    # Remove duplicatas próximas
-    posicoes_filtradas = []
-    for i, (pos, tit) in enumerate(posicoes):
-        if i == 0 or pos - posicoes[i-1][0] > 100:
-            posicoes_filtradas.append((pos, tit))
-    
-    if len(posicoes_filtradas) < 2:
-        return []
-    
-    for i in range(len(posicoes_filtradas)):
-        inicio = posicoes_filtradas[i][0]
-        titulo = posicoes_filtradas[i][1]
-        fim = posicoes_filtradas[i+1][0] if i+1 < len(posicoes_filtradas) else len(texto)
-        
+    if len(posicoes) < 3: return []
+
+    for i in range(len(posicoes)):
+        inicio = posicoes[i][0]
+        titulo = posicoes[i][1]
+        fim = posicoes[i+1][0] if i+1 < len(posicoes) else len(texto)
         conteudo = texto[inicio:fim].strip()
-        
-        # Valida tamanho mínimo do capítulo
-        if len(conteudo) > 300:
-            # Limpa o título
-            titulo_limpo = re.sub(r'\d+$', '', titulo).strip()
-            capitulos.append((titulo_limpo, conteudo))
-    
+        if len(conteudo) > 100:
+            capitulos.append((titulo, conteudo))
     return capitulos
 
-# ---------------- FALLBACK MELHORADO ---------------- #
-def dividir_capitulos(texto):
-    texto = texto.replace('\r', '\n')
-    
-    # Padrões mais abrangentes para capítulos
-    padroes = [
-        r'\n\s*CAP[IÍ]TULO\s+(\d+|[IVXLCDM]+)\s*\n',
-        r'\n\s*PARTE\s+(\d+|[IVXLCDM]+)\s*\n',
-        r'\n\s*(\d+)\.\s+\w+',
-        r'\n\s*([IVXLCDM]+)\.\s+\w+'
-    ]
-    
+def dividir_capitulos_fallback(texto):
+    partes = re.split(r'\n\s*(Cap[ií]tulo\s+\d+|PARTE\s+\d+)\s*\n', texto, flags=re.IGNORECASE)
     capitulos = []
-    
-    for padrao in padroes:
-        matches = list(re.finditer(padrao, texto, re.IGNORECASE))
-        if len(matches) >= 2:
-            for i, match in enumerate(matches):
-                inicio = match.start()
-                titulo = match.group().strip()
-                fim = matches[i+1].start() if i+1 < len(matches) else len(texto)
-                
-                conteudo = texto[inicio:fim].strip()
-                if len(conteudo) > 300:
-                    capitulos.append((titulo, conteudo))
-            break
-    
-    # Fallback final: divisão por parágrafos
-    if len(capitulos) < 2:
-        paragrafos = texto.split('\n\n')
-        capitulo_atual = ""
-        contador = 1
-        
-        for paragrafo in paragrafos:
-            if len(capitulo_atual) + len(paragrafo) < 3000:
-                capitulo_atual += paragrafo + "\n\n"
-            else:
-                if capitulo_atual.strip():
-                    capitulos.append((f"Capítulo {contador}", capitulo_atual.strip()))
-                    contador += 1
-                    capitulo_atual = paragrafo + "\n\n"
-        
-        if capitulo_atual.strip():
-            capitulos.append((f"Capítulo {contador}", capitulo_atual.strip()))
-    
+    if len(partes) > 2:
+        for i in range(1, len(partes), 2):
+            titulo = partes[i]
+            conteudo = partes[i+1] if i+1 < len(partes) else ""
+            if len(conteudo.strip()) > 100:
+                capitulos.append((titulo, conteudo.strip()))
+    else:
+        tamanho = 4000
+        inicio = 0
+        while inicio < len(texto):
+            fim = inicio + tamanho
+            capitulos.append((f"Parte {len(capitulos)+1}", texto[inicio:fim]))
+            inicio = fim
     return capitulos
 
-# ---------------- ESCOLHA INTELIGENTE ---------------- #
 def dividir_inteligente(texto):
-    if not texto:
-        return [], "erro"
-    
     sumario = extrair_sumario(texto)
-    
-    if len(sumario) >= 3:
-        capitulos = dividir_por_sumario(texto, sumario)
-        if len(capitulos) >= 3:
-            return capitulos, "sumario"
-    
-    capitulos = dividir_capitulos(texto)
-    
-    # Validação final
-    capitulos_validos = [(tit, cont) for tit, cont in capitulos if len(cont) > 200]
-    
-    return capitulos_validos, "fallback"
+    capitulos = dividir_por_sumario(texto, sumario)
+    if capitulos: return capitulos, "sumario"
+    return dividir_capitulos_fallback(texto), "fallback"
 
-# 🔥 DIVISÃO PARA TTS OTIMIZADA
-def dividir_texto_tts(texto, max_chars=800):
-    """Divide texto em partes menores e mais gerenciáveis para TTS"""
-    if not texto:
-        return []
-    
-    # Remove quebras de linha excessivas
-    texto = re.sub(r'\n{3,}', '\n\n', texto)
-    
+def dividir_texto_tts(texto, max_chars=2500):
     partes = []
-    frases = re.split(r'(?<=[.!?])\s+', texto)
-    
-    parte_atual = ""
-    
-    for frase in frases:
-        if len(parte_atual) + len(frase) + 1 <= max_chars:
-            parte_atual += frase + " "
-        else:
-            if parte_atual.strip():
-                partes.append(parte_atual.strip())
-            parte_atual = frase + " "
-    
-    if parte_atual.strip():
-        partes.append(parte_atual.strip())
-    
-    return partes if partes else [texto[:max_chars]]
+    while len(texto) > 0:
+        if len(texto) <= max_chars:
+            partes.append(texto)
+            break
+        corte = texto.rfind('.', 0, max_chars)
+        if corte == -1: corte = max_chars
+        partes.append(texto[:corte+1])
+        texto = texto[corte+1:].strip()
+    return [p for p in partes if p.strip()]
 
-# ---------------- GERAÇÃO CORRIGIDA ---------------- #
-async def gerar_audio_parte(texto, voz, caminho):
-    """Gera áudio para uma parte do texto"""
-    try:
-        communicate = edge_tts.Communicate(texto, VOZES[voz])
-        stream = communicate.stream()
-        
-        with open(caminho, "ab") as f:
-            async for chunk in stream:
-                if chunk["type"] == "audio":
-                    f.write(chunk["data"])
-        return True
-    except Exception as e:
-        st.warning(f"Erro na geração: {str(e)[:100]}")
-        return False
-
-async def gerar_zip(texto, voz, titulo, autor):
-    if not texto:
-        st.error("Texto extraído está vazio!")
-        return io.BytesIO()
-    
+# ---------------- GERAÇÃO ---------------- #
+async def gerar_audiobook(texto, voz_key, titulo_livro):
     capitulos, metodo = dividir_inteligente(texto)
-    
-    if not capitulos:
-        st.error("Não foi possível dividir o livro em capítulos!")
-        return io.BytesIO()
-    
     st.write(f"📚 Método: {metodo} | Capítulos: {len(capitulos)}")
     
     zip_buffer = io.BytesIO()
-    barra = st.progress(0)
-    status = st.empty()
-    
+    voz_id = VOZES[voz_key]
+
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+        barra = st.progress(0)
+        status_text = st.empty()
+
         for i, (tit, cont) in enumerate(capitulos, 1):
             num = f"{i:03d}"
-            status.text(f"Processando capítulo {i}/{len(capitulos)}: {tit[:50]}")
+            status_text.text(f"Convertendo: {tit}")
             
-            # Verifica se o conteúdo é válido
-            if not cont or len(cont) < 100:
-                st.warning(f"Capítulo {num} ignorado (muito curto)")
-                continue
-            
-            # Cria arquivo temporário
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-                caminho = tmp.name
-            
-            # Divide o capítulo em partes
             partes = dividir_texto_tts(f"{tit}. {cont}")
-            sucesso = False
-            
-            # Gera cada parte
-            for j, parte in enumerate(partes):
-                if not parte.strip():
-                    continue
-                
-                # Adiciona título apenas na primeira parte
-                if j > 0:
-                    parte = parte
-                
+            cap_buffer = io.BytesIO()
+
+            sucesso_capitulo = False
+            for parte in partes:
                 for tentativa in range(3):
-                    sucesso_parcial = await gerar_audio_parte(parte, voz, caminho)
-                    if sucesso_parcial:
-                        sucesso = True
+                    try:
+                        communicate = edge_tts.Communicate(parte, voz_id)
+                        async for chunk in communicate.stream():
+                            if chunk["type"] == "audio":
+                                cap_buffer.write(chunk["data"])
+                        sucesso_capitulo = True
                         break
-                    await asyncio.sleep(0.5)
-            
-            # Verifica se o arquivo foi gerado com sucesso
-            if sucesso and os.path.exists(caminho) and os.path.getsize(caminho) > 1000:
-                zip_file.write(caminho, f"{num} - {tit[:30]}.mp3")
-                st.success(f"✅ Capítulo {num} concluído")
-            else:
-                st.error(f"❌ Falha no capítulo {num}")
-            
-            # Limpeza
-            if os.path.exists(caminho):
-                os.unlink(caminho)
+                    except Exception:
+                        if tentativa == 2:
+                            st.warning(f"Aviso: Falha parcial no capítulo {num}")
+                        await asyncio.sleep(1)
+
+            if sucesso_capitulo and cap_buffer.tell() > 0:
+                cap_buffer.seek(0)
+                zip_file.writestr(f"{num}.mp3", cap_buffer.read())
             
             barra.progress(i / len(capitulos))
+        
+        status_text.text("✅ Processamento concluído!")
     
-    status.text("Processamento concluído!")
     zip_buffer.seek(0)
     return zip_buffer
 
-# ---------------- FUNÇÃO SÍNCRONA PARA UI ---------------- #
-def gerar_zip_sync(texto, voz, titulo, autor):
-    """Wrapper síncrono para chamada assíncrona"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(gerar_zip(texto, voz, titulo, autor))
-    finally:
-        loop.close()
-
-# ---------------- UI MELHORADA ---------------- #
+# ---------------- UI ---------------- #
 st.title("☁️ Audiobook Cloud")
-st.markdown("Converta seus livros em audiobooks com voz natural")
-
-with st.sidebar:
-    st.header("Instruções")
-    st.markdown("""
-    1. Faça upload do arquivo (PDF ou EPUB)
-    2. Escolha a voz desejada
-    3. Informe título e autor
-    4. Clique em "Gerar Audiobook"
-    
-    **Nota:** Livros grandes podem levar alguns minutos.
-    """)
 
 col1, col2 = st.columns(2)
-
 with col1:
-    arquivo = st.file_uploader("📁 Arquivo do livro", type=["pdf", "epub"])
-    voz = st.selectbox("🎙️ Selecione a voz", list(VOZES.keys()))
-
+    arquivo = st.file_uploader("Upload Livro (PDF/EPUB)", type=["pdf", "epub"])
+    voz = st.selectbox("Voz Narradora", list(VOZES.keys()))
 with col2:
-    titulo = st.text_input("📖 Título do livro")
-    autor = st.text_input("✍️ Autor")
+    titulo = st.text_input("Título do Livro")
+    autor = st.text_input("Autor")
 
-if st.button("🚀 Gerar Audiobook", type="primary"):
-    if not arquivo:
-        st.error("Por favor, faça upload de um arquivo PDF ou EPUB")
-    elif not titulo:
-        st.error("Por favor, informe o título do livro")
-    elif not autor:
-        st.error("Por favor, informe o autor do livro")
+if st.button("Gerar Audiobook"):
+    if not (arquivo and titulo and autor):
+        st.error("Preencha todos os campos e envie o arquivo.")
     else:
-        try:
-            with st.spinner("Extraindo texto do arquivo..."):
-                texto = extrair_texto(arquivo)
+        with st.spinner("Extraindo texto e preparando capítulos..."):
+            texto_completo = extrair_texto(arquivo)
             
-            if not texto or len(texto) < 500:
-                st.error("Texto extraído muito curto ou inválido. Verifique o arquivo.")
-            else:
-                st.success(f"Texto extraído: {len(texto):,} caracteres")
-                
-                with st.spinner("Gerando audiobook. Isso pode levar alguns minutos..."):
-                    zip_data = gerar_zip_sync(texto, voz, titulo, autor)
-                
-                if zip_data and zip_data.getbuffer().nbytes > 0:
-                    st.success("✅ Audiobook gerado com sucesso!")
-                    
-                    st.download_button(
-                        label="📥 Baixar ZIP com todos os capítulos",
-                        data=zip_data.getvalue(),
-                        file_name=f"{titulo.replace(' ', '_')}_{autor.replace(' ', '_')}.zip",
-                        mime="application/zip"
-                    )
-                else:
-                    st.error("Falha ao gerar o audiobook. ZIP vazio.")
-                    
-        except Exception as e:
-            st.error(f"Erro durante o processamento: {str(e)}")
-            st.exception(e)
+            # Criar um novo loop para evitar erros de nested loops no Streamlit
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            zip_data = loop.run_until_complete(gerar_audiobook(texto_completo, voz, titulo))
+
+            st.download_button(
+                label="📥 Baixar Audiobook (ZIP)",
+                data=zip_data,
+                file_name=f"{titulo}.zip",
+                mime="application/zip"
+            )
