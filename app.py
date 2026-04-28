@@ -1,344 +1,721 @@
-import streamlit as st
-import tempfile
+Abaixo estão os dois arquivos completos, prontos para copiar e rodar:
+
+---
+
+## `app.py`
+
+```python
+import asyncio
+import io
 import os
 import re
+import tempfile
 import zipfile
-import asyncio
-import time
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
 
-import PyPDF2
-from ebooklib import epub
+import streamlit as st
+from PyPDF2 import PdfReader
+from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from edge_tts import Communicate
-from gtts import gTTS
-import mutagen.mp3
-from mutagen.mp3 import MP3
 from mutagen.easyid3 import EasyID3
+from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TDRC
+from gtts import gTTS
+import edge_tts
 
-# ==================== CONFIGURAÇÃO ====================
+
+# =========================
+# Configuração Streamlit
+# =========================
 st.set_page_config(
-    page_title="PDF/EPUB → Audiobook",
+    page_title="PDF/EPUB para Audiobook",
     page_icon="🎧",
-    layout="centered"
+    layout="wide"
 )
 
-st.title("🎧 Conversor de Livros em Audiobook")
-st.markdown("Transforme PDFs e EPUBs em audiobooks com vozes naturais (edge-tts + fallback gTTS)")
 
-# ==================== VOZES ====================
-VOICES = {
+# =========================
+# Constantes
+# =========================
+VOICE_OPTIONS = {
     "Francisca (Feminina)": "pt-BR-FranciscaNeural",
     "Antonio (Masculina)": "pt-BR-AntonioNeural",
-    "Brenda (Feminina)": "pt-BR-BrendaNeural",
-    "Donato (Masculina)": "pt-BR-DonatoNeural",
-    "Fabio (Masculina)": "pt-BR-FabioNeural",
+    "Brenda": "pt-BR-BrendaNeural",
+    "Donato": "pt-BR-DonatoNeural",
+    "Fabio": "pt-BR-FabioNeural",
 }
 
-# ==================== FUNÇÕES AUXILIARES ====================
+MAX_TTS_CHARS = 1500
+FALLBACK_BLOCK_CHARS = 3000
+MAX_EDGE_RETRIES = 3
 
-def extract_text_from_pdf(file_bytes):
-    """Extrai texto de PDF usando PyPDF2"""
+
+# =========================
+# Utilidades gerais
+# =========================
+def sanitize_text(text: str) -> str:
+    if not text:
+        return ""
+    text = text.replace("\r", "\n")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" ?\n ?", "\n", text)
+    return text.strip()
+
+
+def normalize_for_match(text: str) -> str:
+    if not text:
+        return ""
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^\w\sà-ÿ]", "", text, flags=re.UNICODE)
+    return text.strip()
+
+
+def safe_filename(name: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*]+', "", name)
+    name = re.sub(r"\s+", "_", name.strip())
+    return name or "audiobook"
+
+
+def split_text_safely(text: str, max_chars: int = MAX_TTS_CHARS) -> List[str]:
+    text = sanitize_text(text)
+    if len(text) <= max_chars:
+        return [text] if text else []
+
+    parts = []
+    remaining = text
+
+    while len(remaining) > max_chars:
+        chunk = remaining[:max_chars]
+
+        split_pos = max(
+            chunk.rfind(". "),
+            chunk.rfind("! "),
+            chunk.rfind("? "),
+            chunk.rfind("\n"),
+            chunk.rfind("; "),
+            chunk.rfind(", "),
+        )
+
+        if split_pos < int(max_chars * 0.5):
+            split_pos = chunk.rfind(" ")
+
+        if split_pos == -1:
+            split_pos = max_chars
+
+        part = remaining[:split_pos + 1].strip()
+        if part:
+            parts.append(part)
+
+        remaining = remaining[split_pos + 1:].strip()
+
+    if remaining:
+        parts.append(remaining)
+
+    return [p for p in parts if p.strip()]
+
+
+def split_text_into_blocks(text: str, target_chars: int = FALLBACK_BLOCK_CHARS) -> List[str]:
+    text = sanitize_text(text)
+    if len(text) <= target_chars:
+        return [text] if text else []
+
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    blocks = []
+    current = ""
+
+    for paragraph in paragraphs:
+        if len(current) + len(paragraph) + 2 <= target_chars:
+            current = f"{current}\n\n{paragraph}".strip()
+        else:
+            if current:
+                blocks.append(current.strip())
+
+            if len(paragraph) <= target_chars:
+                current = paragraph
+            else:
+                subparts = split_text_safely(paragraph, target_chars)
+                if subparts:
+                    blocks.extend(subparts[:-1])
+                    current = subparts[-1]
+                else:
+                    current = ""
+
+    if current.strip():
+        blocks.append(current.strip())
+
+    return [b for b in blocks if b.strip()]
+
+
+# =========================
+# Extração de texto
+# =========================
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    text_parts = []
     try:
-        reader = PyPDF2.PdfReader(file_bytes)
-        text = ""
+        pdf_stream = io.BytesIO(file_bytes)
+        reader = PdfReader(pdf_stream)
         for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n\n"
-        return text.strip(), reader.metadata
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                text_parts.append(page_text)
     except Exception as e:
-        st.error(f"Erro ao ler PDF: {e}")
-        return "", None
+        raise RuntimeError(f"Erro ao ler PDF: {e}") from e
 
-def extract_text_from_epub(file_bytes):
-    """Extrai texto de EPUB usando ebooklib + BeautifulSoup"""
+    full_text = "\n\n".join(text_parts)
+    full_text = sanitize_text(full_text)
+
+    if not full_text.strip():
+        raise RuntimeError("Não foi possível extrair texto do PDF.")
+    return full_text
+
+
+def extract_text_from_epub(file_bytes: bytes) -> str:
+    text_parts = []
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp:
-            tmp.write(file_bytes.read())
+            tmp.write(file_bytes)
             tmp_path = tmp.name
 
         book = epub.read_epub(tmp_path)
-        full_text = ""
-        metadata = {}
-
-        # Tenta extrair metadados
-        try:
-            metadata['title'] = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else "Livro sem título"
-            metadata['creator'] = book.get_metadata('DC', 'creator')[0][0] if book.get_metadata('DC', 'creator') else "Autor desconhecido"
-        except:
-            metadata = {'title': "Livro sem título", 'creator': "Autor desconhecido"}
-
-        for item in book.get_items_of_type(epub.ITEM_DOCUMENT):
-            if item.get_content():
-                soup = BeautifulSoup(item.get_content(), 'html.parser')
-                # Remove scripts e estilos
-                for tag in soup(["script", "style"]):
-                    tag.decompose()
+        for item in book.get_items():
+            if item.get_type() == ITEM_DOCUMENT:
+                content = item.get_content()
+                soup = BeautifulSoup(content, "html.parser")
                 text = soup.get_text(separator="\n")
-                full_text += text + "\n\n"
+                text = sanitize_text(text)
+                if text.strip():
+                    text_parts.append(text)
 
-        os.unlink(tmp_path)
-        return full_text.strip(), metadata
     except Exception as e:
-        st.error(f"Erro ao ler EPUB: {e}")
-        return "", {}
+        raise RuntimeError(f"Erro ao ler EPUB: {e}") from e
+    finally:
+        try:
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
-def detect_chapters(text):
-    """
-    Detecta capítulos com prioridade:
-    1. Sumário (Índice / Sumário / Contents)
-    2. Padrões comuns (Capítulo, Chapter, Parte, Part)
-    3. Fallback: divisão por tamanho (~3000 chars)
-    """
-    lines = text.split('\n')
-    chapters = []
+    full_text = "\n\n".join(text_parts)
+    full_text = sanitize_text(full_text)
 
-    # Padrões de capítulos
-    chapter_patterns = [
-        r'^(Capítulo|Chapter|Parte|Part)\s+[\dIVX]+[:\.\s-]*(.*)$',
-        r'^\s*(\d+)\.\s*(.+)$',                    # 1. Título
-        r'^\s*Capítulo\s+(\d+|[IVX]+)[:\.\s-]*(.*)$',
-        r'^\s*Chapter\s+(\d+|[IVX]+)[:\.\s-]*(.*)$',
-    ]
+    if not full_text.strip():
+        raise RuntimeError("Não foi possível extrair texto do EPUB.")
+    return full_text
 
-    current_chapter = {"title": "Introdução", "content": ""}
-    chapter_count = 0
 
-    for line in lines:
-        line_stripped = line.strip()
-        is_chapter = False
+def extract_text(uploaded_file) -> str:
+    ext = Path(uploaded_file.name).suffix.lower()
+    file_bytes = uploaded_file.read()
 
-        for pattern in chapter_patterns:
-            match = re.match(pattern, line_stripped, re.IGNORECASE)
-            if match:
-                if current_chapter["content"].strip():
-                    chapters.append(current_chapter)
-                title = line_stripped[:100]  # limita tamanho
-                current_chapter = {"title": title, "content": ""}
-                is_chapter = True
-                chapter_count += 1
+    if ext == ".pdf":
+        return extract_text_from_pdf(file_bytes)
+    if ext == ".epub":
+        return extract_text_from_epub(file_bytes)
+
+    raise RuntimeError("Formato não suportado. Envie PDF ou EPUB.")
+
+
+# =========================
+# Detecção de sumário e capítulos
+# =========================
+def find_toc_section(text: str) -> List[str]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    toc_start = -1
+
+    for i, line in enumerate(lines):
+        if re.fullmatch(r"(sumário|sumario|índice|indice|contents|table of contents)", line.strip(), re.IGNORECASE):
+            toc_start = i
+            break
+
+    if toc_start == -1:
+        return []
+
+    toc_lines = []
+    for line in lines[toc_start + 1: toc_start + 80]:
+        clean_line = line.strip()
+
+        if not clean_line:
+            continue
+
+        if re.fullmatch(r"\d+", clean_line):
+            continue
+
+        toc_lines.append(clean_line)
+
+        if len(toc_lines) >= 30:
+            break
+
+    return toc_lines
+
+
+def clean_toc_entry(line: str) -> Optional[str]:
+    line = line.strip()
+
+    if len(line) < 3:
+        return None
+
+    line = re.sub(r"\.{2,}\s*\d+$", "", line)
+    line = re.sub(r"\s+\d+$", "", line)
+    line = re.sub(r"^[\-\•\·\*]+\s*", "", line)
+    line = re.sub(r"^\d+[\.\-\)]\s*", "", line)
+    line = line.strip(" .-_\t")
+
+    if len(line) < 3:
+        return None
+
+    if normalize_for_match(line) in {"sumário", "sumario", "índice", "indice", "contents"}:
+        return None
+
+    return line
+
+
+def parse_toc_titles(text: str) -> List[str]:
+    toc_lines = find_toc_section(text)
+    titles = []
+
+    for line in toc_lines:
+        title = clean_toc_entry(line)
+        if title:
+            titles.append(title)
+
+    unique_titles = []
+    seen = set()
+    for title in titles:
+        key = normalize_for_match(title)
+        if key and key not in seen:
+            seen.add(key)
+            unique_titles.append(title)
+
+    return unique_titles
+
+
+def locate_titles_in_text(text: str, titles: List[str]) -> List[Tuple[int, str]]:
+    lines = text.splitlines()
+    positions = []
+
+    normalized_lines = [normalize_for_match(line) for line in lines]
+
+    for title in titles:
+        n_title = normalize_for_match(title)
+        if not n_title:
+            continue
+
+        found_index = None
+
+        for idx, n_line in enumerate(normalized_lines):
+            if n_title == n_line:
+                found_index = idx
                 break
 
-        if not is_chapter:
-            current_chapter["content"] += line + "\n"
+        if found_index is None:
+            for idx, n_line in enumerate(normalized_lines):
+                if n_title in n_line and len(n_title) >= 5:
+                    found_index = idx
+                    break
 
-    if current_chapter["content"].strip():
-        chapters.append(current_chapter)
+        if found_index is not None:
+            char_pos = sum(len(lines[i]) + 1 for i in range(found_index))
+            positions.append((char_pos, title))
 
-    # Fallback se poucos capítulos foram detectados
-    if len(chapters) <= 2 and len(text) > 5000:
-        st.info("Poucos capítulos detectados. Usando divisão automática por blocos.")
-        chunks = []
-        current = ""
-        for sentence in re.split(r'(?<=[.!?])\s+', text):
-            if len(current) + len(sentence) > 2800:
-                if current:
-                    chunks.append({"title": f"Parte {len(chunks)+1}", "content": current.strip()})
-                current = sentence + " "
-            else:
-                current += sentence + " "
-        if current:
-            chunks.append({"title": f"Parte {len(chunks)+1}", "content": current.strip()})
-        return chunks
+    positions = sorted(set(positions), key=lambda x: x[0])
+    return positions
 
-    return chapters if chapters else [{"title": "Conteúdo Completo", "content": text}]
 
-def split_text_for_tts(text, max_chars=1400):
-    """Divide texto em partes menores para evitar limites do TTS"""
-    if len(text) <= max_chars:
-        return [text]
+def split_by_toc(text: str) -> Optional[List[Dict[str, str]]]:
+    titles = parse_toc_titles(text)
+    if len(titles) < 2:
+        return None
 
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    parts = []
-    current = ""
+    positions = locate_titles_in_text(text, titles)
+    if len(positions) < 2:
+        return None
 
-    for sentence in sentences:
-        if len(current) + len(sentence) > max_chars:
-            if current:
-                parts.append(current.strip())
-            current = sentence + " "
-        else:
-            current += sentence + " "
+    chapters = []
+    for i, (start_pos, title) in enumerate(positions):
+        end_pos = positions[i + 1][0] if i + 1 < len(positions) else len(text)
+        content = text[start_pos:end_pos].strip()
+        if len(content) >= 50:
+            chapters.append({"title": title, "content": content})
 
-    if current:
-        parts.append(current.strip())
+    if len(chapters) >= 2:
+        return chapters
+    return None
 
-    return parts
 
-async def generate_audio_edge(text, voice, output_path):
-    """Gera áudio com edge-tts com retry"""
-    for attempt in range(3):
+def split_by_pattern(text: str) -> Optional[List[Dict[str, str]]]:
+    pattern = re.compile(
+        r"(?im)^(cap[ií]tulo\s+[0-9ivxlcdm]+|parte\s+[0-9ivxlcdm]+|chapter\s+[0-9ivxlcdm]+|part\s+[0-9ivxlcdm]+)\b.*$"
+    )
+
+    matches = list(pattern.finditer(text))
+    if len(matches) < 2:
+        return None
+
+    chapters = []
+    for i, match in enumerate(matches):
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        title_line = match.group(0).strip()
+        content = text[start:end].strip()
+
+        if len(content) >= 50:
+            chapters.append({"title": title_line, "content": content})
+
+    if len(chapters) >= 2:
+        return chapters
+    return None
+
+
+def split_by_fallback(text: str) -> List[Dict[str, str]]:
+    blocks = split_text_into_blocks(text, FALLBACK_BLOCK_CHARS)
+    chapters = []
+
+    for i, block in enumerate(blocks, start=1):
+        chapters.append({
+            "title": f"Bloco {i}",
+            "content": block
+        })
+
+    return chapters
+
+
+def detect_and_split_chapters(text: str) -> Tuple[List[Dict[str, str]], str]:
+    chapters = split_by_toc(text)
+    if chapters:
+        return chapters, "sumário"
+
+    chapters = split_by_pattern(text)
+    if chapters:
+        return chapters, "padrão"
+
+    chapters = split_by_fallback(text)
+    return chapters, "fallback"
+
+
+# =========================
+# TTS
+# =========================
+async def edge_tts_generate(text: str, voice: str, output_path: str) -> None:
+    communicate = edge_tts.Communicate(text=text, voice=voice)
+    await communicate.save(output_path)
+
+
+def generate_edge_audio_chunk(text: str, voice: str, output_path: str) -> bool:
+    for attempt in range(1, MAX_EDGE_RETRIES + 1):
         try:
-            communicate = Communicate(text, voice)
-            await communicate.save(output_path)
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            asyncio.run(edge_tts_generate(text, voice, output_path))
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                 return True
-        except Exception as e:
-            if attempt == 2:
-                st.warning(f"edge-tts falhou após 3 tentativas: {e}")
-                return False
-            await asyncio.sleep(1)
+        except Exception:
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
     return False
 
-def generate_audio_gtts(text, output_path):
-    """Fallback com gTTS"""
+
+def generate_gtts_audio_chunk(text: str, output_path: str) -> bool:
     try:
-        tts = gTTS(text=text, lang='pt', slow=False)
+        tts = gTTS(text=text, lang="pt")
         tts.save(output_path)
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 1000
-    except Exception as e:
-        st.error(f"gTTS falhou: {e}")
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except Exception:
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
         return False
 
-def add_metadata_to_mp3(mp3_path, title, artist, track_num, album="Audiobook"):
-    """Adiciona metadados ID3 ao MP3"""
+
+def combine_mp3_files(parts: List[str], output_path: str) -> bool:
     try:
-        audio = MP3(mp3_path, ID3=EasyID3)
-        audio["title"] = title
-        audio["artist"] = artist
-        audio["album"] = album
-        audio["tracknumber"] = str(track_num)
-        audio.save()
+        with open(output_path, "wb") as outfile:
+            wrote_anything = False
+            for part in parts:
+                if os.path.exists(part) and os.path.getsize(part) > 0:
+                    with open(part, "rb") as infile:
+                        data = infile.read()
+                        if data:
+                            outfile.write(data)
+                            wrote_anything = True
+
+        return wrote_anything and os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception:
-        pass  # Metadados não são críticos
+        return False
 
-# ==================== INTERFACE STREAMLIT ====================
 
-uploaded_file = st.file_uploader("Escolha um arquivo PDF ou EPUB", type=['pdf', 'epub'])
-
-if uploaded_file:
-    col1, col2 = st.columns(2)
-
-    with col1:
-        book_title = st.text_input("Título do livro", value=uploaded_file.name.rsplit('.', 1)[0])
-    with col2:
-        author = st.text_input("Autor", value="Autor Desconhecido")
-
-    year = st.text_input("Ano (opcional)", value="2025")
-
-    voice_name = st.selectbox("Escolha a voz", options=list(VOICES.keys()))
-    voice_id = VOICES[voice_name]
-
-    if st.button("🚀 Gerar Audiobook", type="primary"):
-        with st.spinner("Extraindo texto do arquivo..."):
-            file_bytes = uploaded_file
-            file_ext = uploaded_file.name.lower().split('.')[-1]
-
-            if file_ext == 'pdf':
-                text, metadata = extract_text_from_pdf(file_bytes)
-                if metadata and '/Title' in metadata:
-                    book_title = metadata['/Title'] or book_title
-                if metadata and '/Author' in metadata:
-                    author = metadata['/Author'] or author
-            else:  # epub
-                text, metadata = extract_text_from_epub(file_bytes)
-                if metadata.get('title'):
-                    book_title = metadata['title']
-                if metadata.get('creator'):
-                    author = metadata['creator']
-
-            if not text or len(text.strip()) < 100:
-                st.error("Não foi possível extrair texto suficiente do arquivo.")
-                st.stop()
-
-        # Detecção de capítulos
-        with st.spinner("Detectando capítulos..."):
-            chapters = detect_chapters(text)
-            st.success(f"✅ {len(chapters)} capítulos detectados")
-
-        # Geração de áudio
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        temp_dir = tempfile.mkdtemp()
-        audio_files = []
-
+def add_metadata_to_mp3(
+    file_path: str,
+    title: str,
+    author: str,
+    track_number: int,
+    year: str = ""
+) -> None:
+    try:
         try:
-            for i, chapter in enumerate(chapters):
-                status_text.text(f"Gerando áudio {i+1}/{len(chapters)}: {chapter['title'][:60]}...")
+            audio = EasyID3(file_path)
+        except Exception:
+            audio = ID3()
 
-                chapter_text = chapter['content'].strip()
-                if not chapter_text:
-                    continue
+        if isinstance(audio, EasyID3):
+            audio["title"] = title
+            audio["artist"] = author or "Desconhecido"
+            audio["tracknumber"] = str(track_number)
+            if year:
+                audio["date"] = year
+            audio.save(file_path)
+        else:
+            audio.add(TIT2(encoding=3, text=title))
+            audio.add(TPE1(encoding=3, text=author or "Desconhecido"))
+            audio.add(TRCK(encoding=3, text=str(track_number)))
+            if year:
+                audio.add(TDRC(encoding=3, text=year))
+            audio.save(file_path)
+    except Exception:
+        pass
 
-                parts = split_text_for_tts(chapter_text)
-                chapter_audio_paths = []
 
-                for j, part in enumerate(parts):
-                    audio_path = os.path.join(temp_dir, f"ch_{i:03d}_part_{j:02d}.mp3")
+def generate_chapter_audio(
+    chapter_text: str,
+    voice: str,
+    final_output_path: str
+) -> Tuple[bool, str]:
+    chunks = split_text_safely(chapter_text, MAX_TTS_CHARS)
+    if not chunks:
+        return False, "Texto vazio para geração."
 
-                    success = False
-                    # Tenta edge-tts primeiro
-                    try:
-                        success = asyncio.run(generate_audio_edge(part, voice_id, audio_path))
-                    except:
-                        success = False
+    temp_parts = []
 
-                    # Fallback gTTS
-                    if not success:
-                        success = generate_audio_gtts(part, audio_path)
+    try:
+        for idx, chunk in enumerate(chunks, start=1):
+            part_path = f"{final_output_path}.part{idx}.mp3"
 
-                    if success and os.path.exists(audio_path):
-                        chapter_audio_paths.append(audio_path)
+            success_edge = generate_edge_audio_chunk(chunk, voice, part_path)
+            if not success_edge:
+                success_gtts = generate_gtts_audio_chunk(chunk, part_path)
+                if not success_gtts:
+                    return False, f"Falha ao gerar parte {idx} com edge-tts e gTTS."
 
-                # Junta partes do capítulo (se necessário)
-                if len(chapter_audio_paths) > 1:
-                    final_chapter_path = os.path.join(temp_dir, f"{i+1:03d}.mp3")
-                    # Simples concatenação (pode melhorar com pydub se quiser crossfade)
-                    with open(final_chapter_path, "wb") as outfile:
-                        for fpath in chapter_audio_paths:
-                            with open(fpath, "rb") as infile:
-                                outfile.write(infile.read())
-                    audio_files.append(final_chapter_path)
-                elif chapter_audio_paths:
-                    final_chapter_path = os.path.join(temp_dir, f"{i+1:03d}.mp3")
-                    os.rename(chapter_audio_paths[0], final_chapter_path)
-                    audio_files.append(final_chapter_path)
+            if not os.path.exists(part_path) or os.path.getsize(part_path) == 0:
+                return False, f"Arquivo de áudio da parte {idx} não foi gerado corretamente."
 
-                # Atualiza progresso
-                progress = (i + 1) / len(chapters)
-                progress_bar.progress(progress)
+            temp_parts.append(part_path)
 
-            # Adiciona metadados
-            for idx, audio_path in enumerate(audio_files):
-                add_metadata_to_mp3(
-                    audio_path,
-                    title=f"{book_title} - Capítulo {idx+1}",
-                    artist=author,
-                    track_num=idx+1,
-                    album=book_title
-                )
+        combined = combine_mp3_files(temp_parts, final_output_path)
+        if not combined:
+            return False, "Falha ao combinar partes do áudio."
 
-            # Cria ZIP
-            zip_path = os.path.join(temp_dir, "audiobook.zip")
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                for audio in audio_files:
-                    zipf.write(audio, os.path.basename(audio))
+        if not os.path.exists(final_output_path) or os.path.getsize(final_output_path) == 0:
+            return False, "Arquivo final de áudio não foi gerado corretamente."
 
-            # Download
-            with open(zip_path, "rb") as f:
-                st.success("✅ Audiobook gerado com sucesso!")
+        return True, "OK"
+
+    finally:
+        for part in temp_parts:
+            if os.path.exists(part):
+                try:
+                    os.remove(part)
+                except Exception:
+                    pass
+
+
+# =========================
+# ZIP
+# =========================
+def create_zip_from_files(file_paths: List[str], zip_path: str) -> bool:
+    try:
+        valid_files = [fp for fp in file_paths if os.path.exists(fp) and os.path.getsize(fp) > 0]
+        if not valid_files:
+            return False
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in valid_files:
+                zf.write(file_path, arcname=os.path.basename(file_path))
+
+        return os.path.exists(zip_path) and os.path.getsize(zip_path) > 0
+    except Exception:
+        return False
+
+
+# =========================
+# Interface
+# =========================
+st.title("🎧 Conversor de PDF/EPUB para Audiobook")
+st.write("Faça upload de um arquivo PDF ou EPUB, detecte capítulos automaticamente e gere um audiobook em MP3.")
+
+with st.sidebar:
+    st.header("Configurações")
+    selected_voice_label = st.selectbox("Selecione a voz", list(VOICE_OPTIONS.keys()))
+    selected_voice = VOICE_OPTIONS[selected_voice_label]
+
+    book_title = st.text_input("Título", value="")
+    author = st.text_input("Autor", value="")
+    year = st.text_input("Ano (opcional)", value="")
+
+uploaded_file = st.file_uploader("Envie um arquivo PDF ou EPUB", type=["pdf", "epub"])
+
+if uploaded_file is not None:
+    try:
+        with st.spinner("Extraindo texto do arquivo..."):
+            text = extract_text(uploaded_file)
+
+        if not text.strip():
+            st.error("Não foi possível extrair texto do arquivo enviado.")
+            st.stop()
+
+        chapters, method = detect_and_split_chapters(text)
+
+        if not chapters:
+            st.error("Não foi possível detectar conteúdo para geração de áudio.")
+            st.stop()
+
+        if not book_title.strip():
+            inferred_title = Path(uploaded_file.name).stem
+            book_title = inferred_title
+
+        st.success("Texto extraído com sucesso.")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"**Método de divisão utilizado:** {method}")
+        with col2:
+            st.info(f"**Número de capítulos detectados:** {len(chapters)}")
+
+        st.subheader("Preview dos primeiros capítulos")
+        preview_limit = min(5, len(chapters))
+        for i in range(preview_limit):
+            st.markdown(f"**{i + 1}. {chapters[i]['title']}**")
+            st.caption(chapters[i]["content"][:300].replace("\n", " ") + ("..." if len(chapters[i]["content"]) > 300 else ""))
+
+        if st.button("Gerar Audiobook", type="primary"):
+            progress_bar = st.progress(0)
+            status_box = st.empty()
+            log_box = st.empty()
+
+            generated_files = []
+            errors = []
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                status_box.info("Iniciando geração dos áudios...")
+
+                for idx, chapter in enumerate(chapters, start=1):
+                    filename = f"{idx:03d}.mp3"
+                    output_path = os.path.join(tmpdir, filename)
+
+                    chapter_title = chapter["title"].strip() or f"Capítulo {idx}"
+                    chapter_text = chapter["content"].strip()
+
+                    if not chapter_text:
+                        errors.append(f"{filename}: capítulo vazio.")
+                        progress_bar.progress(idx / len(chapters))
+                        continue
+
+                    status_box.info(f"Gerando {filename} - {chapter_title}")
+
+                    success, message = generate_chapter_audio(
+                        chapter_text=chapter_text,
+                        voice=selected_voice,
+                        final_output_path=output_path
+                    )
+
+                    if success:
+                        add_metadata_to_mp3(
+                            file_path=output_path,
+                            title=f"{book_title} - {chapter_title}",
+                            author=author,
+                            track_number=idx,
+                            year=year
+                        )
+
+                        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                            generated_files.append(output_path)
+                        else:
+                            errors.append(f"{filename}: arquivo final inválido após metadados.")
+                    else:
+                        errors.append(f"{filename}: {message}")
+
+                    progress_bar.progress(idx / len(chapters))
+
+                    if errors:
+                        log_box.warning("Erros parciais detectados:\n\n" + "\n".join(errors[-5:]))
+
+                if not generated_files:
+                    st.error("Nenhum arquivo de áudio foi gerado. Verifique o arquivo enviado e tente novamente.")
+                    if errors:
+                        st.text_area("Detalhes dos erros", "\n".join(errors), height=200)
+                    st.stop()
+
+                zip_name = safe_filename(f"{book_title}_audiobook") + ".zip"
+                zip_path = os.path.join(tmpdir, zip_name)
+
+                status_box.info("Compactando arquivos em ZIP...")
+                zip_success = create_zip_from_files(generated_files, zip_path)
+
+                if not zip_success:
+                    st.error("Falha ao gerar o arquivo ZIP final.")
+                    if errors:
+                        st.text_area("Detalhes dos erros", "\n".join(errors), height=200)
+                    st.stop()
+
+                with open(zip_path, "rb") as f:
+                    zip_bytes = f.read()
+
+                if not zip_bytes:
+                    st.error("O arquivo ZIP final ficou vazio.")
+                    st.stop()
+
+                status_box.success("Audiobook gerado com sucesso!")
+
                 st.download_button(
-                    label="📥 Baixar Audiobook (.zip)",
-                    data=f,
-                    file_name=f"{book_title.replace(' ', '_')}_audiobook.zip",
+                    label="📥 Baixar ZIP com os áudios",
+                    data=zip_bytes,
+                    file_name=zip_name,
                     mime="application/zip"
                 )
 
-            # Preview dos primeiros capítulos
-            st.subheader("Preview dos capítulos")
-            for i in range(min(3, len(chapters))):
-                with st.expander(f"Capítulo {i+1}: {chapters[i]['title'][:80]}"):
-                    st.write(chapters[i]['content'][:500] + "..." if len(chapters[i]['content']) > 500 else chapters[i]['content'])
+                st.subheader("Resumo da geração")
+                st.write(f"**Arquivos de áudio gerados:** {len(generated_files)}")
+                st.write(f"**Falhas:** {len(errors)}")
 
-        except Exception as e:
-            st.error(f"Erro durante a geração: {e}")
-        finally:
-            # Limpeza (opcional - Streamlit Cloud gerencia temp)
-            pass
+                if errors:
+                    st.text_area("Detalhes dos erros", "\n".join(errors), height=200)
 
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao processar o arquivo: {e}")
 else:
-    st.info("Faça upload de um arquivo PDF ou EPUB para começar.")
+    st.info("Envie um arquivo PDF ou EPUB para começar.")
+```
 
-st.caption("App robusto com fallback edge-tts → gTTS | Compatível com Streamlit Cloud")
+---
+
+## `requirements.txt`
+
+```txt
+streamlit
+edge-tts
+PyPDF2
+ebooklib
+beautifulsoup4
+mutagen
+gTTS
+lxml
+```
+
+---
+
+## Observações rápidas
+- O app foi feito para rodar no **Streamlit Cloud**.
+- O fallback de TTS usa **gTTS** caso o **edge-tts** falhe.
+- O ZIP só é liberado se houver arquivos válidos.
+- O app mostra:
+  - método de divisão
+  - quantidade de capítulos
+  - preview
+  - progresso
+  - erros parciais, se existirem
+
+Se quiser, eu também posso te entregar uma **versão melhorada com `packages.txt` para ffmpeg** e junção de áudios mais confiável, caso você queira máxima compatibilidade.
