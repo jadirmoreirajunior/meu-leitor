@@ -20,15 +20,14 @@ VOICES = {
     "Fabio (Masculino)": "pt-BR-FabioNeural"
 }
 
-# --- FIX ASYNCIO (ESSENCIAL) ---
+# --- FIX ASYNCIO ---
 def run_async_task(coro):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(coro)
     loop.close()
 
-# --- EXTRAÇÃO ---
-
+# --- EXTRAÇÃO PDF ---
 def extract_text_pdf(file):
     reader = PdfReader(file)
     text = ""
@@ -38,6 +37,46 @@ def extract_text_pdf(file):
             text += content + "\n"
     return text
 
+# --- TOC HELPERS (EPUB) ---
+def flatten_toc(toc):
+    for item in toc:
+        if isinstance(item, tuple):
+            yield item[0]
+            yield from flatten_toc(item[1])
+        else:
+            yield item
+
+def split_epub_by_toc(book):
+    chapters = []
+    try:
+        for item in flatten_toc(book.toc):
+            try:
+                title = item.title
+                content_item = book.get_item_with_href(item.href)
+
+                if not content_item:
+                    continue
+
+                soup = BeautifulSoup(content_item.get_content(), 'html.parser')
+
+                for tag in soup(['img', 'svg']):
+                    tag.decompose()
+
+                text = soup.get_text(separator="\n")
+
+                if text.strip() and len(text) > 300:
+                    chapters.append({
+                        "title": title.strip(),
+                        "content": text.strip()
+                    })
+            except:
+                continue
+    except:
+        return []
+
+    return chapters
+
+# --- EXTRAÇÃO EPUB ---
 def extract_text_epub(file):
     with open("temp.epub", "wb") as f:
         f.write(file.getbuffer())
@@ -45,13 +84,13 @@ def extract_text_epub(file):
     try:
         book = epub.read_epub("temp.epub")
 
-        # 🔥 TENTA USAR TOC PRIMEIRO
+        # 1️⃣ tenta TOC
         toc_chapters = split_epub_by_toc(book)
 
         if len(toc_chapters) > 2:
-            return toc_chapters, "TOC (sumário do EPUB)"
+            return toc_chapters, "TOC (sumário EPUB)"
 
-        # fallback: texto completo
+        # 2️⃣ fallback texto bruto
         texts = []
         for item in book.get_items():
             if item.get_type() == ITEM_DOCUMENT:
@@ -72,64 +111,7 @@ def extract_text_epub(file):
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
 
-def generate_preview(text, voice):
-    preview_file = "preview.mp3"
-    sample = text[:500] if len(text) > 500 else text
-
-    try:
-        run_async_task(generate_edge_tts(sample, voice, preview_file))
-        return preview_file
-    except:
-        try:
-            tts = gTTS(text=sample, lang='pt')
-            tts.save(preview_file)
-            return preview_file
-        except:
-            return None
-
-def flatten_toc(toc):
-    for item in toc:
-        if isinstance(item, tuple):
-            yield item[0]
-            yield from flatten_toc(item[1])
-        else:
-            yield item
-
-
-def split_epub_by_toc(book):
-    chapters = []
-
-    try:
-        for item in flatten_toc(book.toc):
-            try:
-                title = item.title
-                content_item = book.get_item_with_href(item.href)
-
-                if not content_item:
-                    continue
-
-                soup = BeautifulSoup(content_item.get_content(), 'html.parser')
-
-                # remove imagens
-                for tag in soup(['img', 'svg']):
-                    tag.decompose()
-
-                text = soup.get_text(separator="\n")
-
-                if text.strip() and len(text) > 300:
-                    chapters.append({
-                        "title": title.strip(),
-                        "content": text.strip()
-                    })
-            except:
-                continue
-    except:
-        return []
-
-    return chapters
-
-# --- DIVISÃO DE TEXTO EM CAPÍTULOS ---
-
+# --- DIVISÃO POR REGEX ---
 def split_text(text):
     pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
@@ -139,6 +121,7 @@ def split_text(text):
         for i in range(len(matches)):
             start = matches[i].start()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
+
             title = matches[i].group().strip()
             content = text[start:end].strip()
 
@@ -148,11 +131,9 @@ def split_text(text):
         if len(chapters) > 1:
             return chapters, "Regex (capítulos detectados)"
 
-    # 🔥 fallback final
     return [{"title": "Livro Completo", "content": text}], "Arquivo único"
 
-# --- DIVISÃO PARA TTS (CRÍTICO) ---
-
+# --- DIVISÃO PARA TTS ---
 def split_for_tts(text, max_chars=2000):
     parts = []
     while len(text) > max_chars:
@@ -166,13 +147,27 @@ def split_for_tts(text, max_chars=2000):
     return parts
 
 # --- EDGE TTS ---
-
 async def generate_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
-# --- GERAÇÃO DE ÁUDIO ---
+# --- PREVIEW ---
+def generate_preview(text, voice):
+    preview_file = "preview.mp3"
+    sample = text[:500]
 
+    try:
+        run_async_task(generate_edge_tts(sample, voice, preview_file))
+        return preview_file
+    except:
+        try:
+            tts = gTTS(text=sample, lang='pt')
+            tts.save(preview_file)
+            return preview_file
+        except:
+            return None
+
+# --- GERAÇÃO DE ÁUDIO ---
 def generate_audio_segment(text, voice, filename, title_tag, author_tag, track_num, year_tag):
     text = text.replace('\xa0', ' ').strip()
     if not text:
@@ -187,7 +182,6 @@ def generate_audio_segment(text, voice, filename, title_tag, author_tag, track_n
             run_async_task(generate_edge_tts(part, voice, temp_file))
             temp_files.append(temp_file)
 
-        # junta os arquivos
         with open(filename, 'wb') as final_audio:
             for tf in temp_files:
                 with open(tf, 'rb') as f:
@@ -195,14 +189,12 @@ def generate_audio_segment(text, voice, filename, title_tag, author_tag, track_n
                 os.remove(tf)
 
     except Exception:
-        # fallback gTTS
         try:
             tts = gTTS(text=text[:3000], lang='pt')
             tts.save(filename)
         except:
             return False
 
-    # metadata
     try:
         audio = MP3(filename, ID3=ID3)
         try: audio.add_tags()
@@ -219,7 +211,6 @@ def generate_audio_segment(text, voice, filename, title_tag, author_tag, track_n
     return True
 
 # --- INTERFACE ---
-
 st.set_page_config(page_title="Audiobook Maker", layout="wide")
 st.title("📚 PDF/EPUB → Audiobook")
 
@@ -231,35 +222,38 @@ with st.sidebar:
     book_author = st.text_input("Autor", "Desconhecido")
     book_year = st.text_input("Ano", "2024")
 
+    if st.button("🔊 Ouvir prévia da voz"):
+        sample_text = "Olá! Esta é uma demonstração da voz selecionada."
+        preview = generate_preview(sample_text, VOICES[selected_voice])
+        if preview:
+            audio_file = open(preview, 'rb')
+            st.audio(audio_file.read(), format="audio/mp3")
+            os.remove(preview)
+
+# --- PROCESSAMENTO ---
 if uploaded_file:
-    with st.spinner("Lendo arquivo..."):
-if uploaded_file.name.lower().endswith(".pdf"):
-    text = extract_text_pdf(uploaded_file)
-    chapters, method = split_text(text)
+    with st.spinner("Processando arquivo..."):
 
-else:
-    result, method = extract_text_epub(uploaded_file)
+        if uploaded_file.name.lower().endswith(".pdf"):
+            text = extract_text_pdf(uploaded_file)
+            chapters, method = split_text(text)
 
-    # 🔥 se já veio pronto do TOC
-    if isinstance(result, list):
-        chapters = result
-    else:
-        chapters, method2 = split_text(result)
-        method = f"{method} + {method2}"
+        else:
+            result, method = extract_text_epub(uploaded_file)
 
-    if not text.strip():
-        st.error("Erro ao extrair texto.")
-        st.stop()
+            if isinstance(result, list):
+                chapters = result
+            else:
+                chapters, method2 = split_text(result)
+                method = f"{method} + {method2}"
 
-    chapters, method = split_text(text)
-    st.info(f"{method} | {len(chapters)} partes")
+    st.info(f"Método: {method} | Partes: {len(chapters)}")
 
-    if st.button("Gerar Áudio"):
+    if st.button("▶️ Gerar Áudio"):
         progress = st.progress(0)
         status = st.empty()
 
         os.makedirs("temp_audio", exist_ok=True)
-
         files = []
 
         for i, cap in enumerate(chapters):
@@ -283,6 +277,7 @@ else:
 
         if files:
             zip_path = "audiobook.zip"
+
             with zipfile.ZipFile(zip_path, 'w') as zipf:
                 for f in files:
                     zipf.write(f, os.path.basename(f))
@@ -294,15 +289,4 @@ else:
             os.remove(zip_path)
             os.rmdir("temp_audio")
 
-            st.success("Concluído!")
-
-if st.button("🔊 Ouvir prévia da voz"):
-    sample_text = "Olá! Esta é uma demonstração da voz selecionada para o seu audiobook."
-    preview = generate_preview(sample_text, VOICES[selected_voice])
-
-    if preview:
-        audio_file = open(preview, 'rb')
-        st.audio(audio_file.read(), format="audio/mp3")
-        os.remove(preview)
-    else:
-        st.error("Erro ao gerar prévia")
+            st.success("✅ Concluído!")
