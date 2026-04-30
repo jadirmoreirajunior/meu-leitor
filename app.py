@@ -3,8 +3,7 @@ import asyncio
 import edge_tts
 import os
 import re
-st.write("Executando...")
-
+import shutil
 import zipfile
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
@@ -12,6 +11,8 @@ from bs4 import BeautifulSoup
 from gtts import gTTS
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
+
+st.write("Executando...")
 
 
 if "zip_ready" not in st.session_state:
@@ -294,7 +295,9 @@ for i, cap in enumerate(chapters):
             st.session_state.zip_ready = True
 
         os.remove(zip_path)
-        os.rmdir("temp_audio")
+        
+        import shutil
+        shutil.rmtree("temp_audio", ignore_errors=True)
 
         st.success("✅ Concluído!")
 
