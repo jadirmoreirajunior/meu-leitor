@@ -258,48 +258,34 @@ if uploaded_file:
 
     st.info(f"Método: {method} | Partes: {len(chapters)}")
 
-    if st.button("▶️ Gerar Áudio", use_container_width=True):
-        progress = st.progress(0)
-        status = st.empty()
+if st.button("▶️ Gerar Áudio"):
+    progress = st.progress(0)
+    status = st.empty()
 
-        os.makedirs("temp_audio", exist_ok=True)
-        files = []
+    os.makedirs("temp_audio", exist_ok=True)
+    files = []
 
-        for i, cap in enumerate(chapters):
-            fname = f"temp_audio/{i+1:03d}.mp3"
-            status.text(f"Processando: {cap['title']}")
+    for i, cap in enumerate(chapters):
+        ...
+        if ok:
+            files.append(fname)
 
-            ok = generate_audio_segment(
-                cap['content'],
-                VOICES[selected_voice],
-                fname,
-                f"{book_title} - {cap['title']}",
-                book_author,
-                i+1,
-                book_year
-            )
+    if files:
+        zip_path = "audiobook.zip"
 
-            if ok:
-                files.append(fname)
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for f in files:
+                zipf.write(f, os.path.basename(f))
+                os.remove(f)
 
-            progress.progress((i + 1) / len(chapters))
+        with open(zip_path, "rb") as f:
+            st.session_state.zip_data = f.read()
+            st.session_state.zip_ready = True
 
-if files:
-    zip_path = "audiobook.zip"
+        os.remove(zip_path)
+        os.rmdir("temp_audio")
 
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
-        for f in files:
-            zipf.write(f, os.path.basename(f))
-            os.remove(f)
-
-    with open(zip_path, "rb") as f:
-        st.session_state.zip_data = f.read()
-        st.session_state.zip_ready = True
-
-    os.remove(zip_path)
-    os.rmdir("temp_audio")
-
-    st.success("✅ Concluído!")
+        st.success("✅ Concluído!")
 
 if st.session_state.zip_ready and st.session_state.zip_data:
     st.download_button(
