@@ -284,22 +284,22 @@ if uploaded_file:
 
             progress.progress((i + 1) / len(chapters))
 
-        if files:
-            zip_path = "audiobook.zip"
+if files:
+    zip_path = "audiobook.zip"
 
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                for f in files:
-                    zipf.write(f, os.path.basename(f))
-                    os.remove(f)
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        for f in files:
+            zipf.write(f, os.path.basename(f))
+            os.remove(f)
 
-with open(zip_path, "rb") as f:
-    st.session_state.zip_data = f.read()
-    st.session_state.zip_ready = True
+    with open(zip_path, "rb") as f:
+        st.session_state.zip_data = f.read()
+        st.session_state.zip_ready = True
 
-os.remove(zip_path)
-os.rmdir("temp_audio")
+    os.remove(zip_path)
+    os.rmdir("temp_audio")
 
-            st.success("✅ Concluído!")
+    st.success("✅ Concluído!")
 
 if st.session_state.zip_ready and st.session_state.zip_data:
     st.download_button(
