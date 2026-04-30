@@ -266,21 +266,25 @@ if st.button("▶️ Gerar Áudio"):
     os.makedirs("temp_audio", exist_ok=True)
     files = []
 
-for i, cap in enumerate(chapters):
-    fname = f"temp_audio/{i+1:03d}.mp3"
+    for i, cap in enumerate(chapters):   # ✅ DENTRO DO BOTÃO
+        fname = f"temp_audio/{i+1:03d}.mp3"
 
-    ok = generate_audio_segment(
-        cap['content'],
-        VOICES[selected_voice],
-        fname,
-        f"{book_title} - {cap['title']}",
-        book_author,
-        i+1,
-        book_year
-    )
+        status.text(f"Processando: {cap['title']}")
 
-    if ok:
-        files.append(fname)
+        ok = generate_audio_segment(
+            cap['content'],
+            VOICES[selected_voice],
+            fname,
+            f"{book_title} - {cap['title']}",
+            book_author,
+            i+1,
+            book_year
+        )
+
+        if ok:
+            files.append(fname)
+
+        progress.progress((i + 1) / len(chapters))
 
     if files:
         zip_path = "audiobook.zip"
