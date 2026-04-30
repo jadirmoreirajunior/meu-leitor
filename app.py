@@ -3,6 +3,8 @@ import asyncio
 import edge_tts
 import os
 import re
+st.write("Executando...")
+
 import zipfile
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
@@ -10,6 +12,7 @@ from bs4 import BeautifulSoup
 from gtts import gTTS
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
+
 
 if "zip_ready" not in st.session_state:
     st.session_state.zip_ready = False
