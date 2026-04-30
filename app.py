@@ -11,6 +11,12 @@ from gtts import gTTS
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
 
+if "zip_ready" not in st.session_state:
+    st.session_state.zip_ready = False
+
+if "zip_data" not in st.session_state:
+    st.session_state.zip_data = None
+    
 # --- CONFIGURAÇÕES ---
 VOICES = {
     "Francisca (Feminina)": "pt-BR-FranciscaNeural",
@@ -249,7 +255,7 @@ if uploaded_file:
 
     st.info(f"Método: {method} | Partes: {len(chapters)}")
 
-    if st.button("▶️ Gerar Áudio"):
+    if st.button("▶️ Gerar Áudio", use_container_width=True):
         progress = st.progress(0)
         status = st.empty()
 
@@ -283,10 +289,18 @@ if uploaded_file:
                     zipf.write(f, os.path.basename(f))
                     os.remove(f)
 
-            with open(zip_path, "rb") as f:
-                st.download_button("📥 Baixar ZIP", f, file_name=f"{book_title}.zip")
+with open(zip_path, "rb") as f:
+    st.session_state.zip_data = f.read()
+    st.session_state.zip_ready = True
 
-            os.remove(zip_path)
-            os.rmdir("temp_audio")
+os.remove(zip_path)
+os.rmdir("temp_audio")
 
             st.success("✅ Concluído!")
+
+if st.session_state.zip_ready and st.session_state.zip_data:
+    st.download_button(
+        "📥 Baixar ZIP",
+        data=st.session_state.zip_data,
+        file_name=f"{book_title}.zip"
+    )
