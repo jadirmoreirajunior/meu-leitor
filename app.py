@@ -41,16 +41,92 @@ def extract_text_pdf(file):
 def extract_text_epub(file):
     with open("temp.epub", "wb") as f:
         f.write(file.getbuffer())
+
     try:
         book = epub.read_epub("temp.epub")
-        chapters = []
-        for item in book.get_items_of_type(ITEM_DOCUMENT):
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            chapters.append(soup.get_text())
-        return "\n".join(chapters)
+
+        # 🔥 TENTA USAR TOC PRIMEIRO
+        toc_chapters = split_epub_by_toc(book)
+
+        if len(toc_chapters) > 2:
+            return toc_chapters, "TOC (sumário do EPUB)"
+
+        # fallback: texto completo
+        texts = []
+        for item in book.get_items():
+            if item.get_type() == ITEM_DOCUMENT:
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+
+                for tag in soup(['img', 'svg']):
+                    tag.decompose()
+
+                text = soup.get_text(separator="\n")
+                if text.strip():
+                    texts.append(text)
+
+        full_text = "\n\n".join(texts)
+
+        return full_text, "Texto bruto EPUB"
+
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
+
+def generate_preview(text, voice):
+    preview_file = "preview.mp3"
+    sample = text[:500] if len(text) > 500 else text
+
+    try:
+        run_async_task(generate_edge_tts(sample, voice, preview_file))
+        return preview_file
+    except:
+        try:
+            tts = gTTS(text=sample, lang='pt')
+            tts.save(preview_file)
+            return preview_file
+        except:
+            return None
+
+def flatten_toc(toc):
+    for item in toc:
+        if isinstance(item, tuple):
+            yield item[0]
+            yield from flatten_toc(item[1])
+        else:
+            yield item
+
+
+def split_epub_by_toc(book):
+    chapters = []
+
+    try:
+        for item in flatten_toc(book.toc):
+            try:
+                title = item.title
+                content_item = book.get_item_with_href(item.href)
+
+                if not content_item:
+                    continue
+
+                soup = BeautifulSoup(content_item.get_content(), 'html.parser')
+
+                # remove imagens
+                for tag in soup(['img', 'svg']):
+                    tag.decompose()
+
+                text = soup.get_text(separator="\n")
+
+                if text.strip() and len(text) > 300:
+                    chapters.append({
+                        "title": title.strip(),
+                        "content": text.strip()
+                    })
+            except:
+                continue
+    except:
+        return []
+
+    return chapters
 
 # --- DIVISÃO DE TEXTO EM CAPÍTULOS ---
 
@@ -58,28 +134,22 @@ def split_text(text):
     pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
 
-    if len(matches) > 1:
+    if len(matches) > 2:
         chapters = []
         for i in range(len(matches)):
             start = matches[i].start()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
             title = matches[i].group().strip()
             content = text[start:end].strip()
-            if content:
+
+            if len(content) > 500:
                 chapters.append({"title": title, "content": content})
-        if chapters:
-            return chapters, "Capítulos detectados"
 
-    # fallback
-    chunks = []
-    max_chars = 3000
-    i = 0
-    while i < len(text):
-        chunk = text[i:i+max_chars]
-        chunks.append({"title": f"Parte {len(chunks)+1}", "content": chunk})
-        i += max_chars
+        if len(chapters) > 1:
+            return chapters, "Regex (capítulos detectados)"
 
-    return chunks, "Divisão por blocos"
+    # 🔥 fallback final
+    return [{"title": "Livro Completo", "content": text}], "Arquivo único"
 
 # --- DIVISÃO PARA TTS (CRÍTICO) ---
 
@@ -163,10 +233,19 @@ with st.sidebar:
 
 if uploaded_file:
     with st.spinner("Lendo arquivo..."):
-        if uploaded_file.name.lower().endswith(".pdf"):
-            text = extract_text_pdf(uploaded_file)
-        else:
-            text = extract_text_epub(uploaded_file)
+if uploaded_file.name.lower().endswith(".pdf"):
+    text = extract_text_pdf(uploaded_file)
+    chapters, method = split_text(text)
+
+else:
+    result, method = extract_text_epub(uploaded_file)
+
+    # 🔥 se já veio pronto do TOC
+    if isinstance(result, list):
+        chapters = result
+    else:
+        chapters, method2 = split_text(result)
+        method = f"{method} + {method2}"
 
     if not text.strip():
         st.error("Erro ao extrair texto.")
@@ -216,3 +295,14 @@ if uploaded_file:
             os.rmdir("temp_audio")
 
             st.success("Concluído!")
+
+if st.button("🔊 Ouvir prévia da voz"):
+    sample_text = "Olá! Esta é uma demonstração da voz selecionada para o seu audiobook."
+    preview = generate_preview(sample_text, VOICES[selected_voice])
+
+    if preview:
+        audio_file = open(preview, 'rb')
+        st.audio(audio_file.read(), format="audio/mp3")
+        os.remove(preview)
+    else:
+        st.error("Erro ao gerar prévia")
