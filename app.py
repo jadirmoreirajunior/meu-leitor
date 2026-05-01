@@ -22,20 +22,66 @@ st.set_page_config(
     layout="wide"
 )
 
-# Injeção de HTML para ícone de instalação (PWA)
+# Injeção de HTML e CSS para centralização e Ícone PWA
 st.markdown(f"""
-    <head>
-        <link rel="apple-touch-icon" sizes="180x180" href="{ICON_URL}">
-        <link rel="icon" type="image/png" sizes="32x32" href="{ICON_URL}">
-        <link rel="manifest" href="data:application/json;base64,{{'name': '{APP_NAME}', 'short_name': '{APP_NAME}', 'icons': [{{'src': '{ICON_URL}', 'sizes': '512x512', 'type': 'image/png'}}]}}">
-    </head>
     <style>
+        /* Esconde elementos do Streamlit */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
-        .stButton>button {{ width: 100%; border-radius: 20px; height: 3em; background-color: #0e1117; color: white; border: 1px solid #30363d; }}
-        .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
+        header {{visibility: hidden;}}
+
+        /* Centraliza a imagem na sidebar */
+        [data-testid="stSidebar"] [data-testid="stImage"] {{
+            display: flex;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+            width: 100%;
+        }}
+
+        /* Estilização dos botões */
+        .stButton>button {{
+            width: 100%;
+            border-radius: 20px;
+            height: 3em;
+            background-color: #0e1117;
+            color: white;
+            border: 1px solid #30363d;
+        }}
+        .stButton>button:hover {{
+            border-color: #f0ad4e;
+            color: #f0ad4e;
+        }}
     </style>
+    
+    <!-- Força o ícone no manifesto do navegador para instalação -->
+    <link rel="icon" href="{ICON_URL}">
+    <link rel="apple-touch-icon" href="{ICON_URL}">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     """, unsafe_allow_html=True)
+
+# --- FUNÇÕES (Mantenha as mesmas funções de extração e áudio anteriores) ---
+# ... (extract_text_pdf, extract_text_epub, split_text, run_edge_tts, generate_audio) ...
+
+# --- INTERFACE ---
+
+st.title(f"🎧 {APP_NAME}")
+st.caption("Transforme seus livros em audiolivros com tecnologia neural.")
+
+with st.sidebar:
+    # Centralização usando colunas
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image(ICON_URL, width=150) # Aumentei um pouco para destaque
+    
+    st.header("Configurações")
+    file = st.file_uploader("Upload PDF ou EPUB", type=["pdf", "epub"])
+    voice_label = st.selectbox("Escolha a Voz", list(VOICES.keys()))
+    book_title = st.text_input("Título do Livro", "Meu Audiobook")
+    book_author = st.text_input("Autor", "Desconhecido")
+    book_year = st.text_input("Ano", "")
+
 
 # --- CONSTANTES ---
 VOICES = {
