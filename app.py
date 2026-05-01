@@ -27,10 +27,17 @@ if "book_ready" not in st.session_state:
 # Injeção de CSS para centralização, ajuste visual e RESPONSIVIDADE
 st.markdown(f"""
     <style>
+        /* Esconde apenas o menu de 3 pontos e a marca do Streamlit, mas MANTÉM o botão da sidebar */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
-        header {{visibility: hidden;}}
         
+        /* Ajuste no Header: esconde a barra, mas permite que o botão (setinha) apareça */
+        header {{
+            background-color: rgba(0,0,0,0);
+            height: 3rem;
+        }}
+
+        /* Centraliza a imagem na sidebar */
         [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
             display: flex; justify-content: center;
         }}
@@ -57,10 +64,6 @@ st.markdown(f"""
             background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
-        
-        .stFileUploader, .stTextInput, .stSelectbox {{
-            border-radius: 10px;
-        }}
     </style>
     <link rel="icon" href="{ICON_URL}"><link rel="apple-touch-icon" href="{ICON_URL}">
     """, unsafe_allow_html=True)
