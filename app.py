@@ -18,7 +18,7 @@ ICON_URL = "https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png"
 
 st.set_page_config(page_title=APP_NAME, page_icon=ICON_URL, layout="wide")
 
-# 1. INICIALIZAÇÃO DA MEMÓRIA (SESSION STATE)
+# 1. INICIALIZAÇÃO DA MEMÓRIA
 if "zip_buffer" not in st.session_state:
     st.session_state.zip_buffer = None
 if "book_ready" not in st.session_state:
@@ -26,35 +26,37 @@ if "book_ready" not in st.session_state:
 if "frase_idx" not in st.session_state:
     st.session_state.frase_idx = 0
 
-# Injeção de CSS para centralização, ajuste visual e RESPONSIVIDADE
+# Injeção de CSS e META TAGS para Redes Sociais (WhatsApp)
 st.markdown(f"""
+    <head>
+        <!-- Open Graph / Facebook / WhatsApp -->
+        <meta property="og:type" content="website">
+        <meta property="og:title" content="{APP_NAME}">
+        <meta property="og:description" content="Transforme seus arquivos PDF e EPUB em audiobooks personalizados.">
+        <meta property="og:image" content="{ICON_URL}">
+        <meta property="og:image:width" content="1200">
+        <meta property="og:image:height" content="630">
+
+        <!-- Twitter -->
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:title" content="{APP_NAME}">
+        <meta name="twitter:description" content="Transforme seus arquivos PDF e EPUB em audiobooks personalizados.">
+        <meta name="twitter:image" content="{ICON_URL}">
+
+        <link rel="icon" href="{ICON_URL}">
+        <link rel="apple-touch-icon" href="{ICON_URL}">
+    </head>
     <style>
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
-        
-        header {{
-            background-color: rgba(0,0,0,0);
-            height: 3rem;
-        }}
+        header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
 
         [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
             display: flex; justify-content: center;
         }}
         
         .main .block-container {{
-            max-width: 900px;
-            padding-top: 2rem;
-            padding-bottom: 2rem;
-        }}
-
-        @media (max-width: 640px) {{
-            .main .block-container {{
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }}
-            .stTitle {{
-                font-size: 1.8rem !important;
-            }}
+            max-width: 900px; padding-top: 2rem; padding-bottom: 2rem;
         }}
 
         .stButton>button {{
@@ -62,12 +64,7 @@ st.markdown(f"""
             background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
-        
-        .stFileUploader, .stTextInput, .stSelectbox {{
-            border-radius: 10px;
-        }}
     </style>
-    <link rel="icon" href="{ICON_URL}"><link rel="apple-touch-icon" href="{ICON_URL}">
     """, unsafe_allow_html=True)
 
 # --- CONFIGURAÇÕES DE VOZ ---
@@ -89,8 +86,7 @@ def flatten_toc(toc):
         if isinstance(item, tuple):
             yield item[0]
             yield from flatten_toc(item[1])
-        else:
-            yield item
+        else: yield item
 
 def split_epub_by_toc(book):
     chapters = []
@@ -118,13 +114,11 @@ def extract_text_pdf(file):
     return text
 
 def extract_text_epub(file):
-    with open("temp.epub", "wb") as f:
-        f.write(file.getbuffer())
+    with open("temp.epub", "wb") as f: f.write(file.getbuffer())
     try:
         book = epub.read_epub("temp.epub")
         toc_chapters = split_epub_by_toc(book)
-        if len(toc_chapters) > 2:
-            return toc_chapters, "Sumário Interno (TOC)"
+        if len(toc_chapters) > 2: return toc_chapters, "Sumário Interno (TOC)"
         texts = []
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
@@ -144,10 +138,8 @@ def split_text_regex(text):
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
             title = matches[i].group().strip()
             content = text[start:end].strip()
-            if len(content) > 300:
-                chapters.append({"title": title, "content": content})
-        if len(chapters) > 1:
-            return chapters, "Padrões de Texto (Regex)"
+            if len(content) > 300: chapters.append({"title": title, "content": content})
+        if len(chapters) > 1: return chapters, "Padrões de Texto (Regex)"
     
     chunks = []
     max_chars = 5000
@@ -162,6 +154,7 @@ def split_text_regex(text):
         curr_idx = end_idx
     return chunks, "Divisão Automática (Blocos)"
 
+# --- MOTOR DE ÁUDIO ---
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
@@ -169,9 +162,8 @@ async def run_edge_tts(text, voice, filename):
 def generate_audio(text, voice, filename, tags):
     text = text.replace('\xa0', ' ').strip()
     if not text: return False
-    
     success = False
-    for attempt in range(3): # MANTEMOS AS 3 TENTATIVAS DE SEGURANÇA
+    for attempt in range(3):
         try:
             asyncio.run(run_edge_tts(text, voice, filename))
             if os.path.exists(filename) and os.path.getsize(filename) > 0:
@@ -207,28 +199,25 @@ def play_voice_preview(voice_id):
     ]
     preview_text = frases[st.session_state.frase_idx]
     st.session_state.frase_idx = (st.session_state.frase_idx + 1) % len(frases)
-    
-    preview_file = "voice_preview.mp3"
+    p_file = "voice_preview.mp3"
     try:
-        asyncio.run(run_edge_tts(preview_text, voice_id, preview_file))
-        return preview_file
+        asyncio.run(run_edge_tts(preview_text, voice_id, p_file))
+        return p_file
     except: return None
 
-# --- INTERFACE PRINCIPAL ---
+# --- INTERFACE ---
 st.title(f"🎧 {APP_NAME}")
-st.markdown("#### Transforme seus arquivos PDF e EPUB em audiobooks personalizados com voz neural de alta qualidade.")
+st.markdown("#### Transforme seus arquivos PDF e EPUB em audiobooks personalizados.")
 st.write("---")
 
 with st.sidebar:
     col_l, col_c, col_r = st.columns([1, 2, 1])
     with col_c: st.image(ICON_URL, use_container_width=True)
-    
     st.header("Configurações")
     file = st.file_uploader("Livro (PDF ou EPUB)", type=["pdf", "epub"])
     
     def reset_preview_idx():
-        if "frase_idx" in st.session_state:
-            st.session_state.frase_idx = (st.session_state.frase_idx + 1) % 5
+        if "frase_idx" in st.session_state: st.session_state.frase_idx = (st.session_state.frase_idx + 1) % 5
 
     voice_label = st.selectbox("Voz", list(VOICES.keys()), on_change=reset_preview_idx)
     
@@ -237,8 +226,7 @@ with st.sidebar:
         if p_path and os.path.exists(p_path):
             st.audio(p_path, format="audio/mp3")
             os.remove(p_path)
-        else:
-            st.error("Erro ao gerar prévia.")
+        else: st.error("Erro ao gerar prévia.")
 
     book_title = st.text_input("Título", "Meu Audiobook")
     book_author = st.text_input("Autor", "Desconhecido")
@@ -256,23 +244,17 @@ if file:
 
     st.info(f"**Método:** {method} | **Partes:** {len(chapters)}")
     
-    with st.expander("📋 Ver lista de capítulos identificados"):
-        for i, cap in enumerate(chapters):
-            st.write(f"**{i+1:02d}** - {cap['title']}")
-    
-    if st.button("🚀 INICIAR GERAÇÃO"):
+    st.write("### 📋 Capítulos Identificados")
+    chapter_status_container = st.container()
+
+    if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
         
         progress = st.progress(0)
         status = st.empty()
-        
         if not os.path.exists("out"): os.makedirs("out")
         files = []
-        
-        # Container para downloads individuais
-        st.write("### 📥 Downloads Parciais")
-        dl_container = st.container()
         
         for i, cap in enumerate(chapters):
             track = i + 1
@@ -283,9 +265,11 @@ if file:
             
             if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                 files.append(fname)
-                with dl_container:
+                with chapter_status_container:
+                    c1, c2 = st.columns([0.75, 0.25])
+                    c1.write(f"✅ {cap['title']}")
                     with open(fname, "rb") as f:
-                        st.download_button(f"Baixar: {cap['title'][:20]}", f.read(), file_name=f"{track:03d}.mp3", key=f"dl_{track}")
+                        c2.download_button(label="📥 Baixar", data=f.read(), file_name=f"{track:03d}.mp3", key=f"dl_{track}")
             
             progress.progress(track / len(chapters))
         
@@ -293,20 +277,17 @@ if file:
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, 'w') as zf:
                 for f in files: zf.write(f, os.path.basename(f))
-            
             st.session_state.zip_buffer = buffer.getvalue()
             st.session_state.book_ready = True
-            st.success("✅ Audiobook gerado com sucesso!")
-            
-            # Limpeza final de arquivos individuais
-            for f in files:
+            st.success("✅ Geração concluída!")
+            for f in files: 
                 if os.path.exists(f): os.remove(f)
 
-# --- DOWNLOAD PERSISTENTE ---
+# --- DOWNLOAD PERSISTENTE (ZIP) ---
 if st.session_state.book_ready and st.session_state.zip_buffer:
     st.write("---")
     st.download_button(
-        label="📥 BAIXAR AUDIOBOOK COMPLETO (.ZIP)",
+        label="📥 BAIXAR LIVRO COMPLETO (.ZIP)",
         data=st.session_state.zip_buffer,
         file_name=f"{book_title.replace(' ', '_')}.zip",
         mime="application/zip"
