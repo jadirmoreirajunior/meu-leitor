@@ -183,7 +183,7 @@ def generate_audio(text, voice, filename, tags):
     return False
 
 def play_voice_preview(voice_id):
-    preview_text = "Olá! Eu sou uma das vozes deste narrador. Espero ser a melhor opção para você!"
+    preview_text = "Olá! Eu sou uma das vozes deste narrador. Espero ser a melhor opção para seu audiobook!"
     preview_file = "voice_preview.mp3"
     try:
         asyncio.run(run_edge_tts(preview_text, voice_id, preview_file))
