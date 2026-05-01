@@ -90,46 +90,40 @@ def extract_text_epub(file):
     finally:
         if os.path.exists("temp.epub"): os.remove("temp.epub")
 
+# --- DIVISÃO POR REGEX ---
 def split_text(text):
-    # Padrão mais flexível para detectar capítulos mesmo com espaços extras
-    # Procura por Capítulo, Chapter, Parte ou Part seguido de número ou algarismo romano
-    pattern = r'(?:^|\n)\s*(?:Capítulo|Chapter|Parte|Part)\s*(?:[IVXLCDM]+|\d+)'
-    
-    matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
-    
-    if len(matches) > 1:
-        method = "Sumário/Padrões Detectados"
+    pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
+    matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
+
+    if len(matches) > 2:
         chapters = []
         for i in range(len(matches)):
             start = matches[i].start()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
-            
-            # Pega a primeira linha como título
-            full_segment = text[start:end].strip()
-            title_line = full_segment.split('\n')[0][:50] # Limita tamanho do título
-            
-            if full_segment:
-                chapters.append({"title": title_line, "content": full_segment})
-        return chapters, method
 
-    # Fallback apenas se não encontrar NADA acima
-    method = "Divisão Automática (Fallback)"
-    chunks = []
-    max_chars = 5000 # Aumentei o bloco para reduzir o número de arquivos no fallback
-    curr_idx = 0
-    while curr_idx < len(text):
-        end_idx = curr_idx + max_chars
-        if end_idx < len(text):
-            last_p = text.rfind('.', curr_idx, end_idx)
-            if last_p != -1 and last_p > curr_idx + 2000: 
-                end_idx = last_p + 1
-        
-        chunk = text[curr_idx:end_idx].strip()
-        if chunk:
-            chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
-        curr_idx = end_idx
-        
-    return chunks, method
+            title = matches[i].group().strip()
+            content = text[start:end].strip()
+
+            if len(content) > 500:
+                chapters.append({"title": title, "content": content})
+
+        if len(chapters) > 1:
+            return chapters, "Regex (capítulos detectados)"
+
+    return [{"title": "Livro Completo", "content": text}], "Arquivo único"
+
+# --- DIVISÃO PARA TTS ---
+def split_for_tts(text, max_chars=2000):
+    parts = []
+    while len(text) > max_chars:
+        split_index = text.rfind('.', 0, max_chars)
+        if split_index == -1:
+            split_index = max_chars
+        parts.append(text[:split_index + 1])
+        text = text[split_index + 1:]
+    if text:
+        parts.append(text)
+    return parts
 
 # --- MOTOR DE ÁUDIO ---
 
