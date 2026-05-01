@@ -183,12 +183,31 @@ def generate_audio(text, voice, filename, tags):
     return False
 
 def play_voice_preview(voice_id):
-    preview_text = "Olá! Eu sou uma das vozes deste narrador. Espero ser a melhor opção para seu audiobook!"
+    # Lista de frases para dinamismo
+    frases = [
+        "Preparado para dar vida a mais uma história? Eu sou uma das vozes disponíveis para sua narração.",
+        "Estou pronto para transformar seus livros favoritos em uma experiência auditiva incrível.",
+        "A leitura engrandece a alma, e eu estou aqui para dar voz aos seus textos preferidos.",
+        "Com tecnologia neural, minha narração busca ser o mais natural e agradável possível para seus ouvidos.",
+        "Me escolhe, me escolhe..."
+    ]
+    
+    # Inicializa o contador de frases se não existir
+    if "frase_idx" not in st.session_state:
+        st.session_state.frase_idx = 0
+    
+    # Seleciona a frase atual
+    preview_text = frases[st.session_state.frase_idx]
+    
+    # Atualiza o índice para a próxima vez (volta ao zero se chegar ao fim da lista)
+    st.session_state.frase_idx = (st.session_state.frase_idx + 1) % len(frases)
+    
     preview_file = "voice_preview.mp3"
     try:
         asyncio.run(run_edge_tts(preview_text, voice_id, preview_file))
         return preview_file
-    except: return None
+    except:
+        return None
 
 # --- INTERFACE PRINCIPAL ---
 st.title(f"🎧 {APP_NAME}")
@@ -202,7 +221,15 @@ with st.sidebar:
     st.header("Configurações")
     file = st.file_uploader("Livro (PDF ou EPUB)", type=["pdf", "epub"])
     
-    voice_label = st.selectbox("Voz", list(VOICES.keys()))
+    def reset_preview_idx():
+        if "frase_idx" in st.session_state:
+            st.session_state.frase_idx = (st.session_state.frase_idx + 1) % 4
+
+    voice_label = st.selectbox(
+        "Voz", 
+        list(VOICES.keys()), 
+        on_change=reset_preview_idx
+    )
     
     # Player de Demonstração
     if st.button("▶️ Demonstração da voz"):
