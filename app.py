@@ -69,12 +69,17 @@ st.markdown(f"""
     """, unsafe_allow_html=True)
 
 # --- CONFIGURAÇÕES DE VOZ ---
+# --- CONFIGURAÇÕES DE VOZ ATUALIZADAS ---
 VOICES = {
-    "Francisca (Feminina)": "pt-BR-FranciscaNeural",
-    "Antonio (Masculino)": "pt-BR-AntonioNeural",
-    "Brenda (Feminina)": "pt-BR-BrendaNeural",
-    "Donato (Masculino)": "pt-BR-DonatoNeural",
-    "Fabio (Masculino)": "pt-BR-FabioNeural"
+    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
+    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
+    "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
+    "Brian (Multilingue)": "en-US-BrianMultilingualNeural",
+    "Ava (Multilingue)": "en-US-AvaMultilingualNeural",
+    "Emma (Multilingue)": "en-US-EmmaMultilingualNeural",
+    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
+    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
+    "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
 }
 
 # --- FUNÇÕES TÉCNICAS ---
