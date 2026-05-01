@@ -18,20 +18,49 @@ ICON_URL = "https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png"
 
 st.set_page_config(page_title=APP_NAME, page_icon=ICON_URL, layout="wide")
 
-# Injeção de CSS para centralização e ajuste visual
+# 1. INICIALIZAÇÃO DA MEMÓRIA (SESSION STATE)
+if "zip_buffer" not in st.session_state:
+    st.session_state.zip_buffer = None
+if "book_ready" not in st.session_state:
+    st.session_state.book_ready = False
+
+# Injeção de CSS para centralização, ajuste visual e RESPONSIVIDADE
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{visibility: hidden;}}
+        
         [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
             display: flex; justify-content: center;
         }}
+        
+        /* RESPONSIVIDADE */
+        .main .block-container {{
+            max-width: 900px;
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }}
+
+        @media (max-width: 640px) {{
+            .main .block-container {{
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }}
+            .stTitle {{
+                font-size: 1.8rem !important;
+            }}
+        }}
+
         .stButton>button {{
             width: 100%; border-radius: 20px; height: 3em;
             background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
+        
+        .stFileUploader, .stTextInput, .stSelectbox {{
+            border-radius: 10px;
+        }}
     </style>
     <link rel="icon" href="{ICON_URL}"><link rel="apple-touch-icon" href="{ICON_URL}">
     """, unsafe_allow_html=True)
@@ -45,7 +74,7 @@ VOICES = {
     "Fabio (Masculino)": "pt-BR-FabioNeural"
 }
 
-# --- HELPERS PARA EPUB (DO SEU RASCUNHO) ---
+# --- FUNÇÕES TÉCNICAS ---
 def flatten_toc(toc):
     for item in toc:
         if isinstance(item, tuple):
@@ -71,8 +100,6 @@ def split_epub_by_toc(book):
     except: return []
     return chapters
 
-# --- EXTRAÇÃO E DIVISÃO ---
-
 def extract_text_pdf(file):
     reader = PdfReader(file)
     text = ""
@@ -86,12 +113,9 @@ def extract_text_epub(file):
         f.write(file.getbuffer())
     try:
         book = epub.read_epub("temp.epub")
-        # 1. Tenta por Sumário (TOC) - Lógica do seu rascunho
         toc_chapters = split_epub_by_toc(book)
         if len(toc_chapters) > 2:
             return toc_chapters, "Sumário Interno (TOC)"
-        
-        # 2. Fallback para Texto Bruto se TOC falhar
         texts = []
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
@@ -104,7 +128,6 @@ def extract_text_epub(file):
 def split_text_regex(text):
     pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
-    
     if len(matches) > 2:
         chapters = []
         for i in range(len(matches)):
@@ -117,8 +140,6 @@ def split_text_regex(text):
         if len(chapters) > 1:
             return chapters, "Padrões de Texto (Regex)"
     
-    # Fallback final por blocos de tamanho fixo
-    method = "Divisão Automática (Blocos)"
     chunks = []
     max_chars = 5000
     curr_idx = 0
@@ -130,9 +151,8 @@ def split_text_regex(text):
         chunk = text[curr_idx:end_idx].strip()
         if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
         curr_idx = end_idx
-    return chunks, method
+    return chunks, "Divisão Automática (Blocos)"
 
-# --- MOTOR DE ÁUDIO ---
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
@@ -142,7 +162,7 @@ def generate_audio(text, voice, filename, tags):
     if not text: return False
     try:
         asyncio.run(run_edge_tts(text, voice, filename))
-        if os.path.exists(filename) and os.path.getsize(filename) > 0:
+        if os.path.exists(filename):
             audio = MP3(filename, ID3=ID3)
             try: audio.add_tags()
             except: pass
@@ -153,29 +173,52 @@ def generate_audio(text, voice, filename, tags):
             audio.save()
             return True
     except:
-        try: # Fallback gTTS
+        try:
             gTTS(text=text[:5000], lang='pt').save(filename)
             return True
         except: return False
     return False
 
-# --- INTERFACE ---
+def play_voice_preview(voice_id):
+    preview_text = "Olá! Eu sou uma das vozes do Narrador ponto AI. Como eu soou para você?"
+    preview_file = "voice_preview.mp3"
+    try:
+        asyncio.run(run_edge_tts(preview_text, voice_id, preview_file))
+        return preview_file
+    except: return None
+
+# --- INTERFACE PRINCIPAL ---
 st.title(f"🎧 {APP_NAME}")
+st.markdown("#### Transforme seus arquivos PDF e EPUB em audiobooks personalizados com voz neural de alta qualidade.")
+st.write("---")
+
 with st.sidebar:
     col_l, col_c, col_r = st.columns([1, 2, 1])
     with col_c: st.image(ICON_URL, use_container_width=True)
+    
     st.header("Configurações")
     file = st.file_uploader("Livro (PDF ou EPUB)", type=["pdf", "epub"])
+    
     voice_label = st.selectbox("Voz", list(VOICES.keys()))
+    
+    # Player de Demonstração
+    if st.button("▶️ Ouvir demonstração desta voz"):
+        preview_path = play_voice_preview(VOICES[voice_label])
+        if preview_path and os.path.exists(preview_path):
+            st.audio(preview_path, format="audio/mp3")
+            os.remove(preview_path)
+        else:
+            st.error("Erro ao gerar prévia.")
+
     book_title = st.text_input("Título", "Meu Audiobook")
     book_author = st.text_input("Autor", "Desconhecido")
     book_year = st.text_input("Ano", "")
 
+# --- PROCESSAMENTO ---
 if file:
-    with st.spinner("Analisando estrutura do livro..."):
+    with st.spinner("Analisando livro..."):
         if file.name.endswith(".pdf"):
-            raw_text = extract_text_pdf(file)
-            chapters, method = split_text_regex(raw_text)
+            chapters, method = split_text_regex(extract_text_pdf(file))
         else:
             res, method = extract_text_epub(file)
             if isinstance(res, list): chapters = res
@@ -184,9 +227,14 @@ if file:
     st.info(f"**Método:** {method} | **Partes:** {len(chapters)}")
     
     if st.button("🚀 INICIAR GERAÇÃO"):
+        # Limpa geração anterior ao começar uma nova
+        st.session_state.zip_buffer = None
+        st.session_state.book_ready = False
+        
         progress = st.progress(0); status = st.empty()
         if not os.path.exists("out"): os.makedirs("out")
         files = []
+        
         for i, cap in enumerate(chapters):
             track = i + 1
             fname = f"out/{track:03d}.mp3"
@@ -197,11 +245,29 @@ if file:
             progress.progress(track / len(chapters))
         
         if files:
-            zip_name = f"{book_title.replace(' ', '_')}.zip"
-            with zipfile.ZipFile(zip_name, 'w') as zf:
-                for f in files: zf.write(f, os.path.basename(f)); os.remove(f)
-            st.success("Pronto!")
-            with open(zip_name, "rb") as f:
-                st.download_button("📥 Baixar ZIP", f, file_name=zip_name)
-            os.remove(zip_name)
-            if os.path.exists("out"): os.rmdir("out")
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as zf:
+                for f in files: 
+                    zf.write(f, os.path.basename(f))
+                    os.remove(f)
+            
+            st.session_state.zip_buffer = buffer.getvalue()
+            st.session_state.book_ready = True
+            st.success("✅ Audiobook gerado com sucesso!")
+            if os.path.exists("out"): 
+                import shutil
+                shutil.rmtree("out", ignore_errors=True)
+
+# --- BOTÃO DE DOWNLOAD PERSISTENTE ---
+if st.session_state.book_ready and st.session_state.zip_buffer:
+    st.write("---")
+    st.download_button(
+        label="📥 BAIXAR AUDIOBOOK COMPLETO (.ZIP)",
+        data=st.session_state.zip_buffer,
+        file_name=f"{book_title.replace(' ', '_')}.zip",
+        mime="application/zip"
+    )
+    if st.button("🗑️ Limpar geração atual"):
+        st.session_state.zip_buffer = None
+        st.session_state.book_ready = False
+        st.rerun()
