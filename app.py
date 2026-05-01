@@ -50,9 +50,9 @@ st.markdown(f"""
     </style>
 
     <!-- Meta Tags para Compartilhamento -->
-    <meta property="og:title" content="{APP_NAME}">
-    <meta property="og:image" content="{ICON_URL}">
-    <meta property="og:description" content="Transforme seus livros em áudio de alta qualidade.">
+    <meta property="og:title" content="Narrador.AI">
+    <meta property="og:image" content="https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png">
+    <meta property="og:description" content="Transforme seus livros em áudio de alta qualidade com ajuda de IA.">
     <meta property="og:type" content="website">
     """, unsafe_allow_html=True)
 
