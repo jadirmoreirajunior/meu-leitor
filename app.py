@@ -161,8 +161,6 @@ def split_text_regex(text):
         curr_idx = end_idx
     return chunks, "Divisão Automática (Blocos)"
 
-# --- MOTOR DE ÁUDIO OTIMIZADO ---
-
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
@@ -170,24 +168,9 @@ async def run_edge_tts(text, voice, filename):
 def generate_audio(text, voice, filename, tags):
     text = text.replace('\xa0', ' ').strip()
     if not text: return False
-    
-    success = False
-    # MANTEMOS AS 3 TENTATIVAS para garantir a robustez que você preza
-    for attempt in range(3):
-        try:
-            asyncio.run(run_edge_tts(text, voice, filename))
-            if os.path.exists(filename) and os.path.getsize(filename) > 0:
-                success = True
-                break
-        except Exception:
-            if attempt == 2: # Somente após 3 falhas usamos o gTTS
-                try:
-                    gTTS(text=text[:5000], lang='pt').save(filename)
-                    success = True
-                except: return False
-    
-    if success:
-        try:
+    try:
+        asyncio.run(run_edge_tts(text, voice, filename))
+        if os.path.exists(filename):
             audio = MP3(filename, ID3=ID3)
             try: audio.add_tags()
             except: pass
@@ -196,9 +179,14 @@ def generate_audio(text, voice, filename, tags):
             audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
             if tags['year']: audio.tags.add(TYER(encoding=3, text=str(tags['year'])))
             audio.save()
-        except: pass
-    return success
-    
+            return True
+    except:
+        try:
+            gTTS(text=text[:5000], lang='pt').save(filename)
+            return True
+        except: return False
+    return False
+
 def play_voice_preview(voice_id):
     # Lista de frases para dinamismo
     frases = [
@@ -261,8 +249,7 @@ with st.sidebar:
     book_author = st.text_input("Autor", "Desconhecido")
     book_year = st.text_input("Ano", "")
 
-# --- PROCESSAMENTO COM DOWNLOADS INDIVIDUAIS E VISUALIZAÇÃO ---
-
+# --- PROCESSAMENTO ---
 if file:
     with st.spinner("Analisando livro..."):
         if file.name.endswith(".pdf"):
@@ -272,52 +259,24 @@ if file:
             if isinstance(res, list): chapters = res
             else: chapters, m2 = split_text_regex(res); method = f"{method} + {m2}"
 
-    st.info(f"**Método:** {method} | **Partes detectadas:** {len(chapters)}")
+    st.info(f"**Método:** {method} | **Partes:** {len(chapters)}")
     
-    # Visualização prévia dos capítulos detectados
-    with st.expander("📋 Ver capítulos identificados"):
-        for i, cap in enumerate(chapters):
-            st.write(f"**{i+1:02d}** - {cap['title']}")
-
-    if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
+    if st.button("🚀 INICIAR GERAÇÃO"):
+        # Limpa geração anterior ao começar uma nova
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
         
-        progress = st.progress(0)
-        status = st.empty()
+        progress = st.progress(0); status = st.empty()
         if not os.path.exists("out"): os.makedirs("out")
         files = []
-        
-        # Container para os botões de download individuais
-        st.write("### 📥 Downloads Disponíveis (Capítulos Prontos)")
-        download_container = st.container()
         
         for i, cap in enumerate(chapters):
             track = i + 1
             fname = f"out/{track:03d}.mp3"
-            
-            status.markdown(f"🎙️ **Convertendo:** {cap['title']} ({track}/{len(chapters)})")
-            
-            info_tags = {
-                'title': f"{book_title} - {cap['title']}", 
-                'author': book_author, 
-                'track': track, 
-                'year': book_year
-            }
-            
-            if generate_audio(cap['content'], VOICES[voice_label], fname, info_tags):
+            status.text(f"Convertendo {track}/{len(chapters)}: {cap['title']}")
+            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
+            if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                 files.append(fname)
-                
-                # Exibe botão de download individual imediatamente
-                with download_container:
-                    with open(fname, "rb") as f:
-                        st.download_button(
-                            label=f"💾 Baixar Parte {track}: {cap['title'][:30]}",
-                            data=f.read(),
-                            file_name=f"{track:03d}_{cap['title'][:20]}.mp3",
-                            key=f"btn_{track}"
-                        )
-            
             progress.progress(track / len(chapters))
         
         if files:
@@ -325,26 +284,25 @@ if file:
             with zipfile.ZipFile(buffer, 'w') as zf:
                 for f in files: 
                     zf.write(f, os.path.basename(f))
+                    os.remove(f)
             
             st.session_state.zip_buffer = buffer.getvalue()
             st.session_state.book_ready = True
-            st.success("✨ Processo concluído! O arquivo ZIP está pronto abaixo.")
-            
-            for f in files:
-                if os.path.exists(f): os.remove(f)
+            st.success("✅ Audiobook gerado com sucesso!")
+            if os.path.exists("out"): 
+                import shutil
+                shutil.rmtree("out", ignore_errors=True)
 
-# --- BOTÃO DE DOWNLOAD DO ZIP (PERSISTENTE) ---
+# --- BOTÃO DE DOWNLOAD PERSISTENTE ---
 if st.session_state.book_ready and st.session_state.zip_buffer:
     st.write("---")
-    st.subheader("📦 Download do Audiobook Completo")
     st.download_button(
-        label="📥 BAIXAR LIVRO COMPLETO (.ZIP)",
+        label="📥 BAIXAR AUDIOBOOK COMPLETO (.ZIP)",
         data=st.session_state.zip_buffer,
         file_name=f"{book_title.replace(' ', '_')}.zip",
         mime="application/zip"
     )
-    if st.button("🗑️ Limpar Sessão"):
+    if st.button("🗑️ Limpar geração atual"):
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
-        st.rerun() = False
         st.rerun()
