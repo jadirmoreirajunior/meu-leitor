@@ -189,7 +189,7 @@ def play_voice_preview(voice_id):
         "Estou pronto para transformar seus livros favoritos em uma experiência auditiva incrível.",
         "A leitura engrandece a alma, e eu estou aqui para dar voz aos seus textos preferidos.",
         "Com tecnologia neural, minha narração busca ser o mais natural e agradável possível para seus ouvidos.",
-        "Me escolhe, me escolhe..."
+        "Me escolhe, me escolhe!!!"
     ]
     
     # Inicializa o contador de frases se não existir
