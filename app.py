@@ -205,7 +205,7 @@ with st.sidebar:
     voice_label = st.selectbox("Voz", list(VOICES.keys()))
     
     # Player de Demonstração
-    if st.button("▶️ Ouvir demonstração desta voz"):
+    if st.button("▶️ Demonstração da voz"):
         preview_path = play_voice_preview(VOICES[voice_label])
         if preview_path and os.path.exists(preview_path):
             st.audio(preview_path, format="audio/mp3")
