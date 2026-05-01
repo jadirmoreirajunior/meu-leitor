@@ -26,35 +26,20 @@ if "book_ready" not in st.session_state:
 if "frase_idx" not in st.session_state:
     st.session_state.frase_idx = 0
 
-# Injeção de CSS e META TAGS para Redes Sociais (WhatsApp)
+# Injeção de CSS e Meta Tags (CORRIGIDO PARA NÃO APARECER NA TELA)
 st.markdown(f"""
-    <head>
-        <!-- Open Graph / Facebook / WhatsApp -->
-        <meta property="og:type" content="website">
-        <meta property="og:title" content="{APP_NAME}">
-        <meta property="og:description" content="Transforme seus arquivos PDF e EPUB em audiobooks personalizados.">
-        <meta property="og:image" content="{ICON_URL}">
-        <meta property="og:image:width" content="1200">
-        <meta property="og:image:height" content="630">
-
-        <!-- Twitter -->
-        <meta name="twitter:card" content="summary_large_image">
-        <meta name="twitter:title" content="{APP_NAME}">
-        <meta name="twitter:description" content="Transforme seus arquivos PDF e EPUB em audiobooks personalizados.">
-        <meta name="twitter:image" content="{ICON_URL}">
-
-        <link rel="icon" href="{ICON_URL}">
-        <link rel="apple-touch-icon" href="{ICON_URL}">
-    </head>
     <style>
+        /* Oculta elementos do Streamlit */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
 
+        /* Centraliza a logo na sidebar */
         [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
             display: flex; justify-content: center;
         }}
         
+        /* Ajuste de responsividade */
         .main .block-container {{
             max-width: 900px; padding-top: 2rem; padding-bottom: 2rem;
         }}
@@ -65,6 +50,19 @@ st.markdown(f"""
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
     </style>
+
+    <!-- Meta Tags para WhatsApp e Redes Sociais -->
+    <script>
+        var meta = document.createElement('meta');
+        meta.property = "og:image";
+        meta.content = "{ICON_URL}";
+        document.getElementsByTagName('head')[0].appendChild(meta);
+        
+        var metaTitle = document.createElement('meta');
+        metaTitle.property = "og:title";
+        metaTitle.content = "{APP_NAME}";
+        document.getElementsByTagName('head')[0].appendChild(metaTitle);
+    </script>
     """, unsafe_allow_html=True)
 
 # --- CONFIGURAÇÕES DE VOZ ---
@@ -283,7 +281,7 @@ if file:
             for f in files: 
                 if os.path.exists(f): os.remove(f)
 
-# --- DOWNLOAD PERSISTENTE (ZIP) ---
+# --- DOWNLOAD PERSISTENTE ---
 if st.session_state.book_ready and st.session_state.zip_buffer:
     st.write("---")
     st.download_button(
