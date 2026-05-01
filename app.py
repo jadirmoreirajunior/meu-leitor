@@ -22,24 +22,22 @@ st.set_page_config(
     layout="wide"
 )
 
-# Injeção de HTML e CSS para centralização e Ícone PWA
+# Injeção de CSS para centralização e ajuste visual
 st.markdown(f"""
     <style>
-        /* Esconde elementos do Streamlit */
+        /* Esconde elementos desnecessários do Streamlit */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{visibility: hidden;}}
 
-        /* Centraliza a imagem na sidebar */
-        [data-testid="stSidebar"] [data-testid="stImage"] {{
+        /* Força a centralização da imagem na sidebar */
+        [data-testid="stSidebarNav"] {{display: none;}}
+        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
             display: flex;
             justify-content: center;
-            margin-left: auto;
-            margin-right: auto;
-            width: 100%;
         }}
-
-        /* Estilização dos botões */
+        
+        /* Ajuste de botões */
         .stButton>button {{
             width: 100%;
             border-radius: 20px;
@@ -47,6 +45,7 @@ st.markdown(f"""
             background-color: #0e1117;
             color: white;
             border: 1px solid #30363d;
+            font-weight: bold;
         }}
         .stButton>button:hover {{
             border-color: #f0ad4e;
@@ -54,36 +53,12 @@ st.markdown(f"""
         }}
     </style>
     
-    <!-- Força o ícone no manifesto do navegador para instalação -->
+    <!-- Meta tags para o ícone de instalação (PWA) -->
     <link rel="icon" href="{ICON_URL}">
     <link rel="apple-touch-icon" href="{ICON_URL}">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
     """, unsafe_allow_html=True)
 
-# --- FUNÇÕES (Mantenha as mesmas funções de extração e áudio anteriores) ---
-# ... (extract_text_pdf, extract_text_epub, split_text, run_edge_tts, generate_audio) ...
-
-# --- INTERFACE ---
-
-st.title(f"🎧 {APP_NAME}")
-st.caption("Transforme seus livros em audiolivros com tecnologia neural.")
-
-with st.sidebar:
-    # Centralização usando colunas
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image(ICON_URL, width=150) # Aumentei um pouco para destaque
-    
-    st.header("Configurações")
-    file = st.file_uploader("Upload PDF ou EPUB", type=["pdf", "epub"])
-    voice_label = st.selectbox("Escolha a Voz", list(VOICES.keys()))
-    book_title = st.text_input("Título do Livro", "Meu Audiobook")
-    book_author = st.text_input("Autor", "Desconhecido")
-    book_year = st.text_input("Ano", "")
-
-
-# --- CONSTANTES ---
+# --- CONFIGURAÇÕES DE VOZ ---
 VOICES = {
     "Francisca (Feminina)": "pt-BR-FranciscaNeural",
     "Antonio (Masculino)": "pt-BR-AntonioNeural",
@@ -115,9 +90,8 @@ def extract_text_epub(file):
     finally:
         if os.path.exists("temp.epub"): os.remove("temp.epub")
 
-# --- LÓGICA DE CAPÍTULOS ---
-
 def split_text(text):
+    # Regex corrigido para evitar o erro de 'global flags'
     pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
     
@@ -146,7 +120,7 @@ def split_text(text):
         curr_idx = end_idx
     return chunks, method
 
-# --- MOTOR TTS ---
+# --- MOTOR DE ÁUDIO ---
 
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
@@ -156,36 +130,44 @@ def generate_audio(text, voice, filename, tags):
     text = text.replace('\xa0', ' ').strip()
     if not text: return False
     
+    success = False
     for attempt in range(3):
         try:
             asyncio.run(run_edge_tts(text, voice, filename))
             if os.path.exists(filename) and os.path.getsize(filename) > 0:
+                success = True
                 break
         except:
-            if attempt == 2: # Última tentativa: gTTS
+            if attempt == 2:
                 try:
                     gTTS(text=text[:5000], lang='pt').save(filename)
+                    success = True
                 except: return False
     
-    try:
-        audio = MP3(filename, ID3=ID3)
-        try: audio.add_tags()
+    if success:
+        try:
+            audio = MP3(filename, ID3=ID3)
+            try: audio.add_tags()
+            except: pass
+            audio.tags.add(TIT2(encoding=3, text=tags['title']))
+            audio.tags.add(TPE1(encoding=3, text=tags['author']))
+            audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
+            if tags['year']: audio.tags.add(TYER(encoding=3, text=str(tags['year'])))
+            audio.save()
         except: pass
-        audio.tags.add(TIT2(encoding=3, text=tags['title']))
-        audio.tags.add(TPE1(encoding=3, text=tags['author']))
-        audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
-        if tags['year']: audio.tags.add(TYER(encoding=3, text=str(tags['year'])))
-        audio.save()
-    except: pass
-    return True
+    return success
 
 # --- INTERFACE ---
 
 st.title(f"🎧 {APP_NAME}")
-st.caption("Transforme seus livros em audiolivros com tecnologia neural.")
+st.caption("Leitor inteligente com conversão neural de alta qualidade.")
 
 with st.sidebar:
-    st.image(ICON_URL, width=100)
+    # Centralização manual da Logo
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        st.image(ICON_URL, use_container_width=True)
+    
     st.header("Configurações")
     file = st.file_uploader("Upload PDF ou EPUB", type=["pdf", "epub"])
     voice_label = st.selectbox("Escolha a Voz", list(VOICES.keys()))
@@ -194,14 +176,14 @@ with st.sidebar:
     book_year = st.text_input("Ano", "")
 
 if file:
-    with st.spinner("Extraindo texto..."):
+    with st.spinner("Extraindo conteúdo..."):
         text_data = extract_text_pdf(file) if file.name.endswith(".pdf") else extract_text_epub(file)
     
     if text_data:
         chapters, method = split_text(text_data)
-        st.info(f"Modo: {method} | Itens: {len(chapters)}")
+        st.info(f"**Método:** {method} | **Capítulos:** {len(chapters)}")
         
-        if st.button("🚀 GERAR AUDIOBOOK"):
+        if st.button("🚀 INICIAR GERAÇÃO"):
             progress = st.progress(0)
             status = st.empty()
             if not os.path.exists("out"): os.makedirs("out")
@@ -210,23 +192,31 @@ if file:
             for i, cap in enumerate(chapters):
                 track_num = i + 1
                 fname = f"out/{track_num:03d}.mp3"
-                status.text(f"Processando {track_num}/{len(chapters)}: {cap['title']}")
+                status.text(f"Convertendo {track_num}/{len(chapters)}: {cap['title']}")
                 
-                tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track_num, 'year': book_year}
+                info_tags = {
+                    'title': f"{book_title} - {cap['title']}", 
+                    'author': book_author, 
+                    'track': track_num, 
+                    'year': book_year
+                }
                 
-                if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
+                if generate_audio(cap['content'], VOICES[voice_label], fname, info_tags):
                     files.append(fname)
                 progress.progress(track_num / len(chapters))
             
             if files:
-                zip_name = f"{book_title}.zip"
+                zip_name = f"{book_title.replace(' ', '_')}.zip"
                 with zipfile.ZipFile(zip_name, 'w') as zf:
                     for f in files:
                         zf.write(f, os.path.basename(f))
                         os.remove(f)
                 
-                st.success("Concluído!")
+                st.success("Audiobook gerado com sucesso!")
                 with open(zip_name, "rb") as f:
-                    st.download_button("📥 Baixar Audiobook (ZIP)", f, file_name=zip_name)
+                    st.download_button("📥 Baixar Arquivo ZIP", f, file_name=zip_name)
+                
                 os.remove(zip_name)
-                os.rmdir("out")
+                if os.path.exists("out"): os.rmdir("out")
+    else:
+        st.error("Não foi possível ler o arquivo. Verifique se o formato é válido.")
