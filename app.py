@@ -171,15 +171,15 @@ with c_info3:
 
 book_author = st.text_input("Autor", "Narrador.AI")
 
-# Lógica de Captura de Texto
+# Processamento de Entrada
 if input_method == "Arquivo":
-    file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
-    if file:
+    uploaded_file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
+    if uploaded_file:
         with st.status("Processando arquivo...", expanded=False) as s:
-            if file.name.endswith(".pdf"): st.session_state.temp_chapters = split_text_regex(extract_text_pdf(file))
-            elif file.name.endswith(".epub"): st.session_state.temp_chapters = extract_text_epub(file)
-            elif file.name.endswith(".docx"): st.session_state.temp_chapters = split_text_regex(extract_text_docx(file))
-            elif file.name.endswith(".txt"): st.session_state.temp_chapters = split_text_regex(extract_text_txt(file))
+            if uploaded_file.name.endswith(".pdf"): st.session_state.temp_chapters = split_text_regex(extract_text_pdf(uploaded_file))
+            elif uploaded_file.name.endswith(".epub"): st.session_state.temp_chapters = extract_text_epub(uploaded_file)
+            elif uploaded_file.name.endswith(".docx"): st.session_state.temp_chapters = split_text_regex(extract_text_docx(uploaded_file))
+            elif uploaded_file.name.endswith(".txt"): st.session_state.temp_chapters = split_text_regex(extract_text_txt(uploaded_file))
             s.update(label="Arquivo processado!", state="complete")
 else:
     manual_text = st.text_area("Texto:", height=250)
@@ -194,32 +194,44 @@ with col_u1:
         st.audio("preview.mp3")
 with col_u2:
     if st.button("🗑️ Limpar Tudo"):
-        st.session_state.zip_buffer = None
-        st.session_state.book_ready = False
-        st.session_state.chapters_generated = []
-        st.session_state.temp_chapters = []
+        st.session_state.clear() # Limpa tudo da memória
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# --- ÁREA DE GERAÇÃO (BOTÃO RESILIENTE) ---
-if st.session_state.temp_chapters:
+# --- ÁREA DE GERAÇÃO (CORREÇÃO CRÍTICA) ---
+if st.session_state.get('temp_chapters'):
     st.info(f"Identificadas {len(st.session_state.temp_chapters)} partes.")
-    if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
+    
+    # Botão de geração agora fora de qualquer condicional volátil
+    if st.button("🚀 INICIAR GERAÇÃO COMPLETA", key="main_gen_btn"):
         st.session_state.chapters_generated = []
         progress_bar = st.progress(0)
+        
         with st.status("Gerando áudios...", expanded=True) as status_gen:
             if not os.path.exists("out"): os.makedirs("out")
             for i, cap in enumerate(st.session_state.temp_chapters):
                 track = i + 1
                 fname = f"out/{track:03d}.mp3"
                 status_gen.write(f"🎙️ Narrando: {cap['title']}")
-                tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
+                
+                tags = {
+                    'title': f"{book_title} - {cap['title']}", 
+                    'author': book_author, 
+                    'track': track, 
+                    'year': book_year
+                }
+                
                 if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                     with open(fname, "rb") as f:
-                        st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
+                        st.session_state.chapters_generated.append({
+                            "title": cap['title'], 
+                            "data": f.read(), 
+                            "track": track
+                        })
                 progress_bar.progress(track / len(st.session_state.temp_chapters))
             status_gen.update(label="Geração concluída!", state="complete")
         
+        # Criação do ZIP
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as zf:
             for item in st.session_state.chapters_generated:
@@ -228,13 +240,23 @@ if st.session_state.temp_chapters:
         st.session_state.book_ready = True
 
 # Área de Downloads
-if st.session_state.chapters_generated:
+if st.session_state.get('chapters_generated'):
     st.write("---")
-    st.subheader("📥 Downloads")
+    st.subheader("📥 Downloads Individuais")
     for item in st.session_state.chapters_generated:
         with st.expander(f"Parte {item['track']}: {item['title']}"):
-            st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
+            st.download_button(
+                "Baixar MP3", 
+                item["data"], 
+                f"{item['track']:03d}.mp3", 
+                key=f"dl_{item['track']}"
+            )
 
-if st.session_state.book_ready:
+if st.session_state.get('book_ready'):
     st.write("---")
-    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
+    st.subheader("📦 Download Completo")
+    st.download_button(
+        "📥 BAIXAR LIVRO COMPLETO (.ZIP)", 
+        st.session_state.zip_buffer, 
+        f"{book_title.replace(' ', '_')}.zip"
+    )
