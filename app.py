@@ -199,10 +199,14 @@ if input_method == "Arquivo":
             status_leitura.update(label="Leitura concluída!", state="complete", expanded=False)
 else:
     manual_text = st.text_area("Digite ou cole seu texto aqui...", height=250)
-    if manual_text:
-        with st.status("Analisando texto...", expanded=True) as status_manual:
-            chapters, _ = split_text_regex(manual_text)
-            status_manual.update(label="Análise concluída!", state="complete", expanded=False)
+    # Adicionamos este botão para usuários de celular
+    if st.button("📝 Processar Texto Digitado"):
+        if manual_text:
+            with st.status("Analisando texto...", expanded=True) as status_manual:
+                chapters, _ = split_text_regex(manual_text)
+                status_manual.update(label="Análise concluída!", state="complete", expanded=False)
+        else:
+            st.warning("Por favor, digite algum texto primeiro.")
 
 # Botões de Ação
 st.write("")
