@@ -36,30 +36,43 @@ if "frase_idx" not in st.session_state:
 if "chapters_generated" not in st.session_state:
     st.session_state.chapters_generated = []
 
-# CSS para Cabeçalho Compacto e Botões
+# --- DICIONÁRIO DE VOZES (RESTAURADO) ---
+VOICES = {
+    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
+    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
+    "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
+    "Brian (Multilingue)": "en-US-BrianMultilingualNeural",
+    "Ava (Multilingue)": "en-US-AvaMultilingualNeural",
+    "Emma (Multilingue)": "en-US-EmmaMultilingualNeural",
+    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
+    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
+    "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
+}
+
+# CSS para Cabeçalho Compacto e Estilização
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
         
-        /* Layout do Cabeçalho Compacto */
         .header-container {{
             display: flex;
             align-items: center;
-            gap: 20px;
-            margin-bottom: 20px;
+            gap: 15px;
+            margin-bottom: 10px;
         }}
         .header-logo {{
-            width: 80px;
-            border-radius: 15px;
+            width: 70px;
+            border-radius: 12px;
         }}
         .header-text h1 {{
             margin: 0;
-            font-size: 1.8rem;
+            font-size: 1.6rem;
         }}
         .header-text p {{
             margin: 0;
+            font-size: 0.9rem;
             color: gray;
         }}
 
@@ -150,7 +163,7 @@ def generate_audio(text, voice, filename, tags):
 
 # --- INTERFACE ---
 
-# Cabeçalho Horizontal
+# Cabeçalho Compacto
 st.markdown(f"""
     <div class="header-container">
         <img src="{ICON_URL}" class="header-logo">
@@ -162,40 +175,45 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Bloco de Configuração
-with st.container():
-    st.write("---")
-    input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        book_title = st.text_input("Título", "Meu Audiobook")
-        book_author = st.text_input("Autor", "Narrador.AI")
-    with col2:
-        book_year = st.text_input("Ano", "")
-        voice_label = st.selectbox("Voz", list(VOICES.keys()))
+st.write("---")
+input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
 
-    if input_method == "Arquivo":
-        file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
-    else:
-        manual_text = st.text_area("Texto Manual", height=250, placeholder="Digite ou cole seu texto aqui...")
+# Grid de informações do livro
+c_info1, c_info2, c_info3 = st.columns([2, 1, 1.5])
+with c_info1:
+    book_title = st.text_input("Título", "Meu Audiobook")
+with c_info2:
+    book_year = st.text_input("Ano", "")
+with c_info3:
+    voice_label = st.selectbox("Voz", list(VOICES.keys()))
 
-    st.write("")
-    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
-    with btn_col1:
-        if st.button("▶️ Ouvir Prévia"):
-            frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
-            preview_text = frases[st.session_state.frase_idx % len(frases)]
-            st.session_state.frase_idx += 1
-            asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
-            st.audio("preview.mp3")
-    
-    with btn_col2:
-        if st.button("🗑️ Limpar Tudo"):
-            st.session_state.zip_buffer = None
-            st.session_state.book_ready = False
-            st.session_state.chapters_generated = []
-            if os.path.exists("out"): shutil.rmtree("out")
-            st.rerun()
+book_author = st.text_input("Autor", "Narrador.AI")
+
+if input_method == "Arquivo":
+    file = st.file_uploader("Upload do arquivo", type=["pdf", "epub", "docx", "txt"])
+    manual_text = ""
+else:
+    manual_text = st.text_area("Digite ou cole seu texto aqui...", height=250)
+    file = None
+
+# Botões de Ação
+st.write("")
+btn_col1, btn_col2 = st.columns(2)
+with btn_col1:
+    if st.button("▶️ Ouvir Prévia"):
+        frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
+        preview_text = frases[st.session_state.frase_idx % len(frases)]
+        st.session_state.frase_idx += 1
+        asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
+        st.audio("preview.mp3")
+
+with btn_col2:
+    if st.button("🗑️ Limpar Tudo"):
+        st.session_state.zip_buffer = None
+        st.session_state.book_ready = False
+        st.session_state.chapters_generated = []
+        if os.path.exists("out"): shutil.rmtree("out")
+        st.rerun()
 
 # --- LÓGICA DE PROCESSAMENTO ---
 chapters = []
@@ -207,10 +225,9 @@ if input_method == "Arquivo" and file:
 elif input_method == "Texto Manual" and manual_text:
     chapters, _ = split_text_regex(manual_text)
 
-# O BOTÃO DE GERAÇÃO AGORA É CENTRALIZADO E UNIFICADO
+# Botão Unificado de Geração
 if chapters:
-    st.info(f"Pronto para processar {len(chapters)} partes.")
-    
+    st.info(f"Identificadas {len(chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
