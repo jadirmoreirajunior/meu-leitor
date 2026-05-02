@@ -111,11 +111,12 @@ with c2: book_year = st.text_input("Ano", "")
 with c3: voice_label = st.selectbox("Voz", list(VOICES.keys()))
 book_author = st.text_input("Autor", "Narrador.AI")
 
+# Processamento de Entrada
 if input_method == "Arquivo":
     uploaded_file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
     if uploaded_file:
         if st.button("📄 PROCESSAR ARQUIVO"):
-            with st.status("Lendo conteúdo...", expanded=False) as s:
+            with st.status("Extraindo texto...", expanded=False) as s:
                 if uploaded_file.name.endswith(".pdf"):
                     raw = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
                     st.session_state.temp_chapters = split_text_logic(raw)
@@ -126,43 +127,45 @@ if input_method == "Arquivo":
                     st.session_state.temp_chapters = split_text_logic(raw)
                 elif uploaded_file.name.endswith(".txt"):
                     st.session_state.temp_chapters = split_text_logic(uploaded_file.getvalue().decode("utf-8", errors="ignore"))
-                s.update(label="Conteúdo extraído!", state="complete")
+                s.update(label="Conteúdo extraído com sucesso!", state="complete")
 else:
     m_text = st.text_area("Texto:", height=250)
     if st.button("✍️ CAPTURAR TEXTO DIGITADO"):
         st.session_state.temp_chapters = split_text_logic(m_text)
         st.success("Texto capturado!")
 
-# --- BOTÕES DE AÇÃO ---
+# Botões de Utilidade
 st.write("")
 col_u1, col_u2 = st.columns(2)
 with col_u1:
     if st.button("▶️ Ouvir Prévia"):
-        asyncio.run(edge_tts.Communicate("Teste de voz.", VOICES[voice_label]).save("preview.mp3"))
+        asyncio.run(edge_tts.Communicate("Teste.", VOICES[voice_label]).save("preview.mp3"))
         st.audio("preview.mp3")
 with col_u2:
     if st.button("🗑️ Limpar Tudo"):
-        # Limpa tudo e reinicia
-        for key in st.session_state.keys():
-            del st.session_state[key]
+        st.session_state.temp_chapters = []
+        st.session_state.chapters_generated = []
+        st.session_state.zip_buffer = None
+        st.session_state.book_ready = False
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# --- ÁREA DE GERAÇÃO (FORA DOS BOTÕES DE PROCESSAMENTO) ---
+# --- ÁREA DE GERAÇÃO (PROTEGIDA) ---
+# Usamos session_state diretamente aqui para que o botão não dependa do clique anterior
 if st.session_state.temp_chapters:
     st.divider()
-    st.info(f"📚 {len(st.session_state.temp_chapters)} partes identificadas. Clique abaixo para gerar o áudio.")
+    st.info(f"✅ {len(st.session_state.temp_chapters)} partes identificadas. Motor pronto.")
     
     if st.button("🚀 INICIAR GERAÇÃO DE ÁUDIO"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
         
-        with st.status("Narrando...", expanded=True) as status_gen:
+        with st.status("Narrando partes...", expanded=True) as status_gen:
             if not os.path.exists("out"): os.makedirs("out")
             for i, cap in enumerate(st.session_state.temp_chapters):
                 track = i + 1
                 fname = f"out/{track:03d}.mp3"
-                status_gen.write(f"🎙️ Processando: {cap['title']}")
+                status_gen.write(f"🎙️ Gerando: {cap['title']}")
                 
                 # Motor TTS
                 asyncio.run(edge_tts.Communicate(cap['content'], VOICES[voice_label]).save(fname))
@@ -178,15 +181,11 @@ if st.session_state.temp_chapters:
                 audio.save()
                 
                 with open(fname, "rb") as f:
-                    st.session_state.chapters_generated.append({
-                        "title": cap['title'], 
-                        "data": f.read(), 
-                        "track": track
-                    })
+                    st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
                 progress.progress(track / len(st.session_state.temp_chapters))
             status_gen.update(label="Narração concluída!", state="complete")
         
-        # Criar ZIP final
+        # Gerar ZIP
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as zf:
             for item in st.session_state.chapters_generated:
@@ -194,14 +193,14 @@ if st.session_state.temp_chapters:
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
 
-# Área de Downloads Individuais
+# Área de Downloads
 if st.session_state.chapters_generated:
-    st.subheader("📥 Capítulos Gerados")
+    st.write("---")
+    st.subheader("📥 Capítulos individuais")
     for item in st.session_state.chapters_generated:
         with st.expander(f"Parte {item['track']}: {item['title']}"):
             st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
 
-# Download do ZIP Completo
 if st.session_state.book_ready:
     st.divider()
-    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
+    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title.replace(' ', '_')}.zip")
