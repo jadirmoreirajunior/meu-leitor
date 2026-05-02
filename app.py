@@ -20,13 +20,13 @@ try:
 except ImportError:
     WORD_SUPPORT = False
 
-# --- CONFIGURAÇÃO DE IDENTIDADE E PWA ---
+# --- CONFIGURAÇÃO DE IDENTIDADE ---
 APP_NAME = "Narrador.AI"
 ICON_URL = "https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png"
 
 st.set_page_config(page_title=APP_NAME, page_icon=ICON_URL, layout="wide")
 
-# 1. INICIALIZAÇÃO DA MEMÓRIA (SESSION STATE)
+# 1. INICIALIZAÇÃO DA MEMÓRIA
 if "zip_buffer" not in st.session_state:
     st.session_state.zip_buffer = None
 if "book_ready" not in st.session_state:
@@ -36,55 +36,46 @@ if "frase_idx" not in st.session_state:
 if "chapters_generated" not in st.session_state:
     st.session_state.chapters_generated = []
 
-# Injeção de CSS para Mobile-First (Sem Sidebar obrigatória)
+# CSS para Cabeçalho Compacto e Botões
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
         
-        /* Ajuste da Logo Centralizada e Menor */
-        .logo-container {{
-            display: flex; justify-content: center; margin-bottom: 10px;
+        /* Layout do Cabeçalho Compacto */
+        .header-container {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 20px;
         }}
-        .logo-img {{
-            width: 120px; border-radius: 20px; box-shadow: 0px 4px 15px rgba(0,0,0,0.3);
+        .header-logo {{
+            width: 80px;
+            border-radius: 15px;
+        }}
+        .header-text h1 {{
+            margin: 0;
+            font-size: 1.8rem;
+        }}
+        .header-text p {{
+            margin: 0;
+            color: gray;
         }}
 
         .main .block-container {{
-            max-width: 800px; padding-top: 1rem; padding-bottom: 2rem;
+            max-width: 900px; padding-top: 1rem; padding-bottom: 2rem;
         }}
         
-        /* Botões Arredondados */
         .stButton>button {{
             width: 100%; border-radius: 20px; height: 3em;
             background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
-        
-        /* Inputs */
-        .stTextInput, .stSelectbox, .stTextArea, .stFileUploader {{
-            border-radius: 12px !important;
-        }}
     </style>
-    <meta property="og:title" content="{APP_NAME}">
-    <meta property="og:image" content="{ICON_URL}">
     """, unsafe_allow_html=True)
 
-# --- CONFIGURAÇÕES DE VOZ ---
-VOICES = {
-    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
-    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
-    "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
-    "Brian (Multilingue)": "en-US-BrianMultilingualNeural",
-    "Ava (Multilingue)": "en-US-AvaMultilingualNeural",
-    "Emma (Multilingue)": "en-US-EmmaMultilingualNeural",
-    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
-    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
-    "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
-}
-
-# --- FUNÇÕES DE EXTRAÇÃO ---
+# --- FUNÇÕES TÉCNICAS ---
 def extract_text_docx(file):
     if not WORD_SUPPORT: return "Erro: python-docx não instalado."
     doc = docx.Document(file)
@@ -134,7 +125,7 @@ def split_text_regex(text):
         chunk = text[curr_idx:end_idx].strip()
         if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
         curr_idx = end_idx
-    return chunks, "Divisão Automática"
+    return chunks, "Automática"
 
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
@@ -157,31 +148,39 @@ def generate_audio(text, voice, filename, tags):
             return True
     except: return False
 
-# --- INTERFACE PRINCIPAL (CORPO DA PÁGINA) ---
-st.markdown(f'<div class="logo-container"><img src="{ICON_URL}" class="logo-img"></div>', unsafe_allow_html=True)
-st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Narrador.AI</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: gray;'>Audiobooks neurais para PDF, EPUB, DOCX e TXT</p>", unsafe_allow_html=True)
+# --- INTERFACE ---
 
-# Bloco de Configuração Central
+# Cabeçalho Horizontal
+st.markdown(f"""
+    <div class="header-container">
+        <img src="{ICON_URL}" class="header-logo">
+        <div class="header-text">
+            <h1>{APP_NAME}</h1>
+            <p>Audiobooks neurais para PDF, EPUB, DOCX e TXT</p>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+
+# Bloco de Configuração
 with st.container():
     st.write("---")
-    input_method = st.radio("Escolha a entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
+    input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
     
     col1, col2 = st.columns(2)
     with col1:
-        book_title = st.text_input("Título do Livro", "Meu Audiobook")
+        book_title = st.text_input("Título", "Meu Audiobook")
         book_author = st.text_input("Autor", "Narrador.AI")
     with col2:
-        book_year = st.text_input("Ano (Opcional)", "")
-        voice_label = st.selectbox("Escolha a Voz", list(VOICES.keys()))
+        book_year = st.text_input("Ano", "")
+        voice_label = st.selectbox("Voz", list(VOICES.keys()))
 
     if input_method == "Arquivo":
-        file = st.file_uploader("Arraste ou selecione o arquivo", type=["pdf", "epub", "docx", "txt"])
+        file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
     else:
-        manual_text = st.text_area("Cole seu texto abaixo:", height=250)
+        manual_text = st.text_area("Texto Manual", height=250, placeholder="Digite ou cole seu texto aqui...")
 
-    # Botões de Ação Lado a Lado
-    btn_col1, btn_col2 = st.columns(2)
+    st.write("")
+    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
     with btn_col1:
         if st.button("▶️ Ouvir Prévia"):
             frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
@@ -189,6 +188,7 @@ with st.container():
             st.session_state.frase_idx += 1
             asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
             st.audio("preview.mp3")
+    
     with btn_col2:
         if st.button("🗑️ Limpar Tudo"):
             st.session_state.zip_buffer = None
@@ -197,18 +197,20 @@ with st.container():
             if os.path.exists("out"): shutil.rmtree("out")
             st.rerun()
 
-# --- LÓGICA DE GERAÇÃO ---
+# --- LÓGICA DE PROCESSAMENTO ---
 chapters = []
 if input_method == "Arquivo" and file:
-    if file.name.endswith(".pdf"): chapters, m = split_text_regex(extract_text_pdf(file))
-    elif file.name.endswith(".epub"): chapters, m = extract_text_epub(file)
-    elif file.name.endswith(".docx"): chapters, m = split_text_regex(extract_text_docx(file))
-    elif file.name.endswith(".txt"): chapters, m = split_text_regex(extract_text_txt(file))
+    if file.name.endswith(".pdf"): chapters, _ = split_text_regex(extract_text_pdf(file))
+    elif file.name.endswith(".epub"): chapters, _ = extract_text_epub(file)
+    elif file.name.endswith(".docx"): chapters, _ = split_text_regex(extract_text_docx(file))
+    elif file.name.endswith(".txt"): chapters, _ = split_text_regex(extract_text_txt(file))
 elif input_method == "Texto Manual" and manual_text:
-    chapters, m = split_text_regex(manual_text)
+    chapters, _ = split_text_regex(manual_text)
 
+# O BOTÃO DE GERAÇÃO AGORA É CENTRALIZADO E UNIFICADO
 if chapters:
-    st.success(f"Identificadas {len(chapters)} partes.")
+    st.info(f"Pronto para processar {len(chapters)} partes.")
+    
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
@@ -231,13 +233,15 @@ if chapters:
                 zf.writestr(f"{item['track']:03d}.mp3", item['data'])
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
-        st.success("Tudo pronto!")
+        status.empty()
+        st.success("Geração Concluída!")
 
-# --- ÁREA DE DOWNLOADS ---
+# Área de Downloads
 if st.session_state.chapters_generated:
+    st.write("---")
     st.subheader("📥 Downloads")
     for item in st.session_state.chapters_generated:
-        with st.expander(f"Capítulo {item['track']}: {item['title']}"):
+        with st.expander(f"Parte {item['track']}: {item['title']}"):
             st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
 
 if st.session_state.book_ready:
