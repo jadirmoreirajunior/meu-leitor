@@ -5,6 +5,7 @@ import os
 import re
 import zipfile
 import io
+import shutil
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
@@ -35,29 +36,42 @@ if "frase_idx" not in st.session_state:
 if "chapters_generated" not in st.session_state:
     st.session_state.chapters_generated = []
 
-# Injeção de CSS e Meta Tags
+# Injeção de CSS para Mobile-First (Sem Sidebar obrigatória)
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
         header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
-        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {{
-            display: flex; justify-content: center;
+        
+        /* Ajuste da Logo Centralizada e Menor */
+        .logo-container {{
+            display: flex; justify-content: center; margin-bottom: 10px;
         }}
+        .logo-img {{
+            width: 120px; border-radius: 20px; box-shadow: 0px 4px 15px rgba(0,0,0,0.3);
+        }}
+
         .main .block-container {{
-            max-width: 900px; padding-top: 2rem; padding-bottom: 2rem;
+            max-width: 800px; padding-top: 1rem; padding-bottom: 2rem;
         }}
+        
+        /* Botões Arredondados */
         .stButton>button {{
             width: 100%; border-radius: 20px; height: 3em;
             background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
+        
+        /* Inputs */
+        .stTextInput, .stSelectbox, .stTextArea, .stFileUploader {{
+            border-radius: 12px !important;
+        }}
     </style>
     <meta property="og:title" content="{APP_NAME}">
     <meta property="og:image" content="{ICON_URL}">
     """, unsafe_allow_html=True)
 
-# --- CONFIGURAÇÕES DE VOZ (CORRIGIDO: CHAVES SIMPLES) ---
+# --- CONFIGURAÇÕES DE VOZ ---
 VOICES = {
     "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
     "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
@@ -72,8 +86,7 @@ VOICES = {
 
 # --- FUNÇÕES DE EXTRAÇÃO ---
 def extract_text_docx(file):
-    if not WORD_SUPPORT:
-        return "Erro: Suporte a Word não instalado. Crie o arquivo requirements.txt."
+    if not WORD_SUPPORT: return "Erro: python-docx não instalado."
     doc = docx.Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
@@ -82,11 +95,7 @@ def extract_text_txt(file):
 
 def extract_text_pdf(file):
     reader = PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        content = page.extract_text()
-        if content: text += content + "\n"
-    return text
+    return "\n".join([page.extract_text() or "" for page in reader.pages])
 
 def extract_text_epub(file):
     with open("temp.epub", "wb") as f: f.write(file.getbuffer())
@@ -99,7 +108,7 @@ def extract_text_epub(file):
             text = soup.get_text(separator="\n")
             if text.strip() and len(text) > 300:
                 chapters.append({"title": f"Parte {len(chapters)+1:02d}", "content": text.strip()})
-        return chapters, "Estrutura EPUB"
+        return chapters, "EPUB"
     finally:
         if os.path.exists("temp.epub"): os.remove("temp.epub")
 
@@ -111,9 +120,7 @@ def split_text_regex(text):
         for i in range(len(matches)):
             start = matches[i].start()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
-            title = matches[i].group().strip()
-            content = text[start:end].strip()
-            if len(content) > 300: chapters.append({"title": title, "content": content})
+            chapters.append({"title": matches[i].group().strip(), "content": text[start:end].strip()})
         return chapters, "Regex"
     
     chunks = []
@@ -127,7 +134,7 @@ def split_text_regex(text):
         chunk = text[curr_idx:end_idx].strip()
         if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
         curr_idx = end_idx
-    return chunks, "Blocos"
+    return chunks, "Divisão Automática"
 
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
@@ -145,59 +152,63 @@ def generate_audio(text, voice, filename, tags):
             audio.tags.add(TIT2(encoding=3, text=tags['title']))
             audio.tags.add(TPE1(encoding=3, text=tags['author']))
             audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
+            if tags.get('year'): audio.tags.add(TYER(encoding=3, text=str(tags['year'])))
             audio.save()
             return True
-    except:
-        return False
+    except: return False
 
-def play_voice_preview(voice_id):
-    frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
-    preview_text = frases[st.session_state.frase_idx % len(frases)]
-    st.session_state.frase_idx += 1
-    p_file = "voice_preview.mp3"
-    try:
-        asyncio.run(run_edge_tts(preview_text, voice_id, p_file))
-        return p_file
-    except: return None
+# --- INTERFACE PRINCIPAL (CORPO DA PÁGINA) ---
+st.markdown(f'<div class="logo-container"><img src="{ICON_URL}" class="logo-img"></div>', unsafe_allow_html=True)
+st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>Narrador.AI</h2>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Audiobooks neurais para PDF, EPUB, DOCX e TXT</p>", unsafe_allow_html=True)
 
-# --- INTERFACE ---
-st.title(f"🎧 {APP_NAME}")
-st.markdown("#### Audiobooks de alta qualidade a partir de PDF, EPUB, DOCX e TXT.")
-
-with st.sidebar:
-    col_l, col_c, col_r = st.columns([1, 2, 1])
-    with col_c: st.image(ICON_URL, use_container_width=True)
+# Bloco de Configuração Central
+with st.container():
+    st.write("---")
+    input_method = st.radio("Escolha a entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
     
-    input_method = st.radio("Entrada:", ["Arquivo", "Texto Manual"])
-    file = None
-    manual_text = ""
+    col1, col2 = st.columns(2)
+    with col1:
+        book_title = st.text_input("Título do Livro", "Meu Audiobook")
+        book_author = st.text_input("Autor", "Narrador.AI")
+    with col2:
+        book_year = st.text_input("Ano (Opcional)", "")
+        voice_label = st.selectbox("Escolha a Voz", list(VOICES.keys()))
+
     if input_method == "Arquivo":
-        file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
+        file = st.file_uploader("Arraste ou selecione o arquivo", type=["pdf", "epub", "docx", "txt"])
     else:
-        manual_text = st.text_area("Digite ou cole seu texto:", height=300)
+        manual_text = st.text_area("Cole seu texto abaixo:", height=250)
 
-    voice_label = st.selectbox("Voz", list(VOICES.keys()))
-    if st.button("▶️ Demonstração"):
-        p = play_voice_preview(VOICES[voice_label])
-        if p: st.audio(p); os.remove(p)
+    # Botões de Ação Lado a Lado
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("▶️ Ouvir Prévia"):
+            frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
+            preview_text = frases[st.session_state.frase_idx % len(frases)]
+            st.session_state.frase_idx += 1
+            asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
+            st.audio("preview.mp3")
+    with btn_col2:
+        if st.button("🗑️ Limpar Tudo"):
+            st.session_state.zip_buffer = None
+            st.session_state.book_ready = False
+            st.session_state.chapters_generated = []
+            if os.path.exists("out"): shutil.rmtree("out")
+            st.rerun()
 
-    book_title = st.text_input("Título", "Meu Audiobook")
-    book_author = st.text_input("Autor", "Narrador.AI")
-
-# --- LÓGICA ---
+# --- LÓGICA DE GERAÇÃO ---
 chapters = []
-method = ""
-
 if input_method == "Arquivo" and file:
-    if file.name.endswith(".pdf"): chapters, method = split_text_regex(extract_text_pdf(file))
-    elif file.name.endswith(".epub"): chapters, method = extract_text_epub(file)
-    elif file.name.endswith(".docx"): chapters, method = split_text_regex(extract_text_docx(file))
-    elif file.name.endswith(".txt"): chapters, method = split_text_regex(extract_text_txt(file))
+    if file.name.endswith(".pdf"): chapters, m = split_text_regex(extract_text_pdf(file))
+    elif file.name.endswith(".epub"): chapters, m = extract_text_epub(file)
+    elif file.name.endswith(".docx"): chapters, m = split_text_regex(extract_text_docx(file))
+    elif file.name.endswith(".txt"): chapters, m = split_text_regex(extract_text_txt(file))
 elif input_method == "Texto Manual" and manual_text:
-    chapters, method = split_text_regex(manual_text)
+    chapters, m = split_text_regex(manual_text)
 
 if chapters:
-    st.info(f"Identificadas {len(chapters)} partes.")
+    st.success(f"Identificadas {len(chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
@@ -208,7 +219,7 @@ if chapters:
             track = i + 1
             fname = f"out/{track:03d}.mp3"
             status.text(f"Gerando: {cap['title']}")
-            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track}
+            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
             if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                 with open(fname, "rb") as f:
                     st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
@@ -220,16 +231,15 @@ if chapters:
                 zf.writestr(f"{item['track']:03d}.mp3", item['data'])
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
-        st.success("Concluído!")
+        st.success("Tudo pronto!")
 
-# --- DOWNLOADS ---
+# --- ÁREA DE DOWNLOADS ---
 if st.session_state.chapters_generated:
-    st.subheader("📥 Capítulos")
+    st.subheader("📥 Downloads")
     for item in st.session_state.chapters_generated:
-        c1, c2 = st.columns([0.8, 0.2])
-        c1.write(item['title'])
-        c2.download_button("Baixar", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
+        with st.expander(f"Capítulo {item['track']}: {item['title']}"):
+            st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
 
 if st.session_state.book_ready:
-    st.divider()
-    st.download_button("📥 BAIXAR TUDO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
+    st.write("---")
+    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
