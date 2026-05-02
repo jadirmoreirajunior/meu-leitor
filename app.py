@@ -35,6 +35,8 @@ if "frase_idx" not in st.session_state:
     st.session_state.frase_idx = 0
 if "chapters_generated" not in st.session_state:
     st.session_state.chapters_generated = []
+if "temp_chapters" not in st.session_state:
+    st.session_state.temp_chapters = []
 
 # --- VOZES ---
 VOICES = {
@@ -68,7 +70,7 @@ st.markdown(f"""
 # --- FUNÇÕES TÉCNICAS ---
 
 def extract_text_docx(file):
-    if not WORD_SUPPORT: return "Erro: biblioteca docx ausente."
+    if not WORD_SUPPORT: return ""
     doc = docx.Document(file)
     return "\n".join([p.text for p in doc.paragraphs])
 
@@ -80,7 +82,6 @@ def extract_text_pdf(file):
     return "\n".join([page.extract_text() or "" for page in reader.pages])
 
 def extract_text_epub(file):
-    """Versão simplificada para evitar KeyError em arquivos com erro de estrutura"""
     with open("temp.epub", "wb") as f:
         f.write(file.getbuffer())
     chapters = []
@@ -94,9 +95,9 @@ def extract_text_epub(file):
                 if len(text) > 200:
                     chapters.append({"title": f"Parte {len(chapters)+1:02d}", "content": text})
             except: continue
-        return chapters, "EPUB (Leitura Linear)"
-    except Exception as e:
-        return [], f"Erro na leitura: {str(e)}"
+        return chapters
+    except:
+        return []
     finally:
         if os.path.exists("temp.epub"): os.remove("temp.epub")
 
@@ -109,7 +110,7 @@ def split_text_regex(text):
             start = matches[i].start()
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
             chapters.append({"title": matches[i].group().strip(), "content": text[start:end].strip()})
-        return chapters, "Regex"
+        return chapters
     
     chunks = []
     max_chars = 5000
@@ -122,7 +123,7 @@ def split_text_regex(text):
         chunk = text[curr_idx:end_idx].strip()
         if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
         curr_idx = end_idx
-    return chunks, "Automática"
+    return chunks
 
 async def run_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
@@ -170,55 +171,54 @@ with c_info3:
 
 book_author = st.text_input("Autor", "Narrador.AI")
 
-chapters = []
+# Lógica de Captura de Texto
 if input_method == "Arquivo":
     file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
     if file:
-        with st.status("Processando arquivo...", expanded=True) as status_leitura:
-            if file.name.endswith(".pdf"): chapters, _ = split_text_regex(extract_text_pdf(file))
-            elif file.name.endswith(".epub"): chapters, _ = extract_text_epub(file)
-            elif file.name.endswith(".docx"): chapters, _ = split_text_regex(extract_text_docx(file))
-            elif file.name.endswith(".txt"): chapters, _ = split_text_regex(extract_text_txt(file))
-            status_leitura.update(label="Concluído!", state="complete", expanded=False)
+        with st.status("Processando arquivo...", expanded=False) as s:
+            if file.name.endswith(".pdf"): st.session_state.temp_chapters = split_text_regex(extract_text_pdf(file))
+            elif file.name.endswith(".epub"): st.session_state.temp_chapters = extract_text_epub(file)
+            elif file.name.endswith(".docx"): st.session_state.temp_chapters = split_text_regex(extract_text_docx(file))
+            elif file.name.endswith(".txt"): st.session_state.temp_chapters = split_text_regex(extract_text_txt(file))
+            s.update(label="Arquivo processado!", state="complete")
 else:
     manual_text = st.text_area("Texto:", height=250)
     if manual_text:
-        with st.status("Analisando...", expanded=True) as status_manual:
-            chapters, _ = split_text_regex(manual_text)
-            status_manual.update(label="Análise concluída!", state="complete", expanded=False)
+        st.session_state.temp_chapters = split_text_regex(manual_text)
 
-st.write("")
-col_btn1, col_btn2 = st.columns(2)
-with col_btn1:
+# Botões de Utilidade
+col_u1, col_u2 = st.columns(2)
+with col_u1:
     if st.button("▶️ Ouvir Prévia"):
-        asyncio.run(run_edge_tts("Preparado para dar vida a mais uma história?", VOICES[voice_label], "preview.mp3"))
+        asyncio.run(run_edge_tts("Teste de voz Narrador ponto A.I", VOICES[voice_label], "preview.mp3"))
         st.audio("preview.mp3")
-with col_btn2:
+with col_u2:
     if st.button("🗑️ Limpar Tudo"):
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
         st.session_state.chapters_generated = []
+        st.session_state.temp_chapters = []
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# --- GERAÇÃO ANIMADA ---
-if chapters:
-    st.info(f"Identificadas {len(chapters)} partes.")
+# --- ÁREA DE GERAÇÃO (BOTÃO RESILIENTE) ---
+if st.session_state.temp_chapters:
+    st.info(f"Identificadas {len(st.session_state.temp_chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress_bar = st.progress(0)
-        with st.status("Iniciando motor de voz...", expanded=True) as status_gen:
+        with st.status("Gerando áudios...", expanded=True) as status_gen:
             if not os.path.exists("out"): os.makedirs("out")
-            for i, cap in enumerate(chapters):
+            for i, cap in enumerate(st.session_state.temp_chapters):
                 track = i + 1
                 fname = f"out/{track:03d}.mp3"
-                status_gen.write(f"🎙️ Narrando: {cap['title']}...")
+                status_gen.write(f"🎙️ Narrando: {cap['title']}")
                 tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
                 if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                     with open(fname, "rb") as f:
                         st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
-                progress_bar.progress(track / len(chapters))
-            status_gen.update(label="Vozes geradas!", state="complete", expanded=False)
+                progress_bar.progress(track / len(st.session_state.temp_chapters))
+            status_gen.update(label="Geração concluída!", state="complete")
         
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as zf:
@@ -226,9 +226,8 @@ if chapters:
                 zf.writestr(f"{item['track']:03d}.mp3", item['data'])
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
-        st.success("Tudo pronto abaixo!")
 
-# Downloads
+# Área de Downloads
 if st.session_state.chapters_generated:
     st.write("---")
     st.subheader("📥 Downloads")
@@ -238,4 +237,4 @@ if st.session_state.chapters_generated:
 
 if st.session_state.book_ready:
     st.write("---")
-    st.download_button("📥 BAIXAR TUDO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
+    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
