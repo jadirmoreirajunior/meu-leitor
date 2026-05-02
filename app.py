@@ -113,19 +113,20 @@ book_author = st.text_input("Autor", "Narrador.AI")
 
 if input_method == "Arquivo":
     uploaded_file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
-    if uploaded_file and st.button("📄 PROCESSAR ARQUIVO"):
-        with st.status("Lendo conteúdo...", expanded=False) as s:
-            if uploaded_file.name.endswith(".pdf"):
-                raw = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
-                st.session_state.temp_chapters = split_text_logic(raw)
-            elif uploaded_file.name.endswith(".epub"):
-                st.session_state.temp_chapters = extract_safe_epub(uploaded_file)
-            elif uploaded_file.name.endswith(".docx") and WORD_SUPPORT:
-                raw = "\n".join([p.text for p in docx.Document(uploaded_file).paragraphs])
-                st.session_state.temp_chapters = split_text_logic(raw)
-            elif uploaded_file.name.endswith(".txt"):
-                st.session_state.temp_chapters = split_text_logic(uploaded_file.getvalue().decode("utf-8", errors="ignore"))
-            s.update(label="Conteúdo extraído!", state="complete")
+    if uploaded_file:
+        if st.button("📄 PROCESSAR ARQUIVO"):
+            with st.status("Lendo conteúdo...", expanded=False) as s:
+                if uploaded_file.name.endswith(".pdf"):
+                    raw = "\n".join([p.extract_text() for p in PdfReader(uploaded_file).pages])
+                    st.session_state.temp_chapters = split_text_logic(raw)
+                elif uploaded_file.name.endswith(".epub"):
+                    st.session_state.temp_chapters = extract_safe_epub(uploaded_file)
+                elif uploaded_file.name.endswith(".docx") and WORD_SUPPORT:
+                    raw = "\n".join([p.text for p in docx.Document(uploaded_file).paragraphs])
+                    st.session_state.temp_chapters = split_text_logic(raw)
+                elif uploaded_file.name.endswith(".txt"):
+                    st.session_state.temp_chapters = split_text_logic(uploaded_file.getvalue().decode("utf-8", errors="ignore"))
+                s.update(label="Conteúdo extraído!", state="complete")
 else:
     m_text = st.text_area("Texto:", height=250)
     if st.button("✍️ CAPTURAR TEXTO DIGITADO"):
@@ -141,27 +142,32 @@ with col_u1:
         st.audio("preview.mp3")
 with col_u2:
     if st.button("🗑️ Limpar Tudo"):
-        st.session_state.clear()
+        # Limpa tudo e reinicia
+        for key in st.session_state.keys():
+            del st.session_state[key]
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# --- ÁREA DE GERAÇÃO (PROTEGIDA) ---
+# --- ÁREA DE GERAÇÃO (FORA DOS BOTÕES DE PROCESSAMENTO) ---
 if st.session_state.temp_chapters:
-    st.info(f"Identificadas {len(st.session_state.temp_chapters)} partes prontas para áudio.")
+    st.divider()
+    st.info(f"📚 {len(st.session_state.temp_chapters)} partes identificadas. Clique abaixo para gerar o áudio.")
+    
     if st.button("🚀 INICIAR GERAÇÃO DE ÁUDIO"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
+        
         with st.status("Narrando...", expanded=True) as status_gen:
             if not os.path.exists("out"): os.makedirs("out")
             for i, cap in enumerate(st.session_state.temp_chapters):
                 track = i + 1
                 fname = f"out/{track:03d}.mp3"
-                status_gen.write(f"🎙️ {cap['title']}")
+                status_gen.write(f"🎙️ Processando: {cap['title']}")
                 
                 # Motor TTS
                 asyncio.run(edge_tts.Communicate(cap['content'], VOICES[voice_label]).save(fname))
                 
-                # Tags
+                # Tags MP3
                 audio = MP3(fname, ID3=ID3)
                 try: audio.add_tags()
                 except: pass
@@ -172,10 +178,15 @@ if st.session_state.temp_chapters:
                 audio.save()
                 
                 with open(fname, "rb") as f:
-                    st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
+                    st.session_state.chapters_generated.append({
+                        "title": cap['title'], 
+                        "data": f.read(), 
+                        "track": track
+                    })
                 progress.progress(track / len(st.session_state.temp_chapters))
-            status_gen.update(label="Concluído!", state="complete")
+            status_gen.update(label="Narração concluída!", state="complete")
         
+        # Criar ZIP final
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as zf:
             for item in st.session_state.chapters_generated:
@@ -183,13 +194,14 @@ if st.session_state.temp_chapters:
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
 
-# Downloads
+# Área de Downloads Individuais
 if st.session_state.chapters_generated:
-    st.write("---")
+    st.subheader("📥 Capítulos Gerados")
     for item in st.session_state.chapters_generated:
         with st.expander(f"Parte {item['track']}: {item['title']}"):
             st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
 
+# Download do ZIP Completo
 if st.session_state.book_ready:
     st.divider()
     st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
