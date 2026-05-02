@@ -5,32 +5,31 @@ import os
 import re
 import zipfile
 import io
-import time
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 from gtts import gTTS
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
+import docx  # Necessário instalar: pip install python-docx
 
 # --- CONFIGURAÇÃO DE IDENTIDADE E PWA ---
 APP_NAME = "Narrador.AI"
 ICON_URL = "https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png"
 
-# O set_page_config deve ser sempre o primeiro comando Streamlit
 st.set_page_config(page_title=APP_NAME, page_icon=ICON_URL, layout="wide")
 
-# 1. INICIALIZAÇÃO DA MEMÓRIA
+# 1. INICIALIZAÇÃO DA MEMÓRIA (SESSION STATE)
 if "zip_buffer" not in st.session_state:
     st.session_state.zip_buffer = None
 if "book_ready" not in st.session_state:
     st.session_state.book_ready = False
 if "frase_idx" not in st.session_state:
     st.session_state.frase_idx = 0
-if "gerando" not in st.session_state:
-    st.session_state.gerando = False
+if "chapters_generated" not in st.session_state:
+    st.session_state.chapters_generated = [] # Memória para os botões individuais
 
-# Injeção de Meta Tags para WhatsApp (OG Tags) e CSS
+# Injeção de CSS e Meta Tags (Invisíveis)
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
@@ -48,11 +47,8 @@ st.markdown(f"""
         }}
         .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
     </style>
-
-    <!-- Meta Tags para Compartilhamento -->
-    <meta property="og:title" content="Narrador.AI">
-    <meta property="og:image" content="https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png">
-    <meta property="og:description" content="Transforme seus livros em áudio de alta qualidade com ajuda de IA.">
+    <meta property="og:title" content="{APP_NAME}">
+    <meta property="og:image" content="{ICON_URL}">
     <meta property="og:type" content="website">
     """, unsafe_allow_html=True)
 
@@ -69,7 +65,16 @@ VOICES = {
     "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
 }
 
-# --- FUNÇÕES TÉCNICAS ---
+# --- NOVAS FUNÇÕES DE EXTRAÇÃO (TXT / WORD) ---
+
+def extract_text_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def extract_text_txt(file):
+    return file.getvalue().decode("utf-8")
+
+# --- FUNÇÕES TÉCNICAS EXISTENTES ---
 def flatten_toc(toc):
     for item in toc:
         if isinstance(item, tuple):
@@ -195,15 +200,24 @@ def play_voice_preview(voice_id):
 
 # --- INTERFACE ---
 st.title(f"🎧 {APP_NAME}")
-st.markdown("#### Transforme seus arquivos PDF e EPUB em audiobooks personalizados.")
+st.markdown("#### Audiobooks de alta qualidade a partir de PDF, EPUB, DOCX e TXT.")
 st.write("---")
 
 with st.sidebar:
     col_l, col_c, col_r = st.columns([1, 2, 1])
     with col_c: st.image(ICON_URL, use_container_width=True)
     st.header("Configurações")
-    file = st.file_uploader("Livro (PDF ou EPUB)", type=["pdf", "epub"])
     
+    # Campo para upload ou texto manual
+    input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"])
+    
+    file = None
+    manual_text = ""
+    if input_method == "Arquivo":
+        file = st.file_uploader("Livro (PDF, EPUB, DOCX, TXT)", type=["pdf", "epub", "docx", "txt"])
+    else:
+        manual_text = st.text_area("Cole seu texto aqui:", height=200)
+
     def reset_preview_idx():
         if "frase_idx" in st.session_state: st.session_state.frase_idx = (st.session_state.frase_idx + 1) % 5
 
@@ -220,70 +234,90 @@ with st.sidebar:
     book_author = st.text_input("Autor", "Desconhecido")
     book_year = st.text_input("Ano", "")
 
-# --- PROCESSAMENTO ---
-if file:
-    with st.spinner("Analisando livro..."):
+# --- LÓGICA DE PROCESSAMENTO DE TEXTO ---
+chapters = []
+method = ""
+
+if input_method == "Arquivo" and file:
+    with st.spinner("Lendo arquivo..."):
         if file.name.endswith(".pdf"):
             chapters, method = split_text_regex(extract_text_pdf(file))
-        else:
+        elif file.name.endswith(".epub"):
             res, method = extract_text_epub(file)
             if isinstance(res, list): chapters = res
             else: chapters, m2 = split_text_regex(res); method = f"{method} + {m2}"
+        elif file.name.endswith(".docx"):
+            chapters, method = split_text_regex(extract_text_docx(file))
+        elif file.name.endswith(".txt"):
+            chapters, method = split_text_regex(extract_text_txt(file))
+elif input_method == "Texto Manual" and manual_text:
+    chapters, method = split_text_regex(manual_text)
 
-    st.info(f"**Método:** {method} | **Partes:** {len(chapters)}")
+# --- EXIBIÇÃO E GERAÇÃO ---
+if chapters:
+    st.info(f"**Detectado:** {len(chapters)} partes via {method}")
     
-    # 1. Mostra a lista ANTES de gerar
-    st.write("### 📋 Capítulos Identificados")
-    dl_area = st.container() # Onde os botões aparecerão
-    
-    if st.button("🚀 INICIAR GERAÇÃO COMPLETA") or st.session_state.gerando:
-        st.session_state.gerando = True
+    if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
+        st.session_state.chapters_generated = [] # Limpa a memória anterior
         
         progress = st.progress(0)
         status = st.empty()
         if not os.path.exists("out"): os.makedirs("out")
-        files_found = []
         
         for i, cap in enumerate(chapters):
             track = i + 1
             fname = f"out/{track:03d}.mp3"
+            status.markdown(f"🎙️ **Convertendo:** {cap['title']} ({track}/{len(chapters)})")
             
-            # Se o arquivo já existe, pula para o próximo
-            if not os.path.exists(fname):
-                status.markdown(f"🎙️ **Convertendo:** {cap['title']} ({track}/{len(chapters)})")
-                tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
-                generate_audio(cap['content'], VOICES[voice_label], fname, tags)
+            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
             
-            # Atualiza a área de download em tempo real
-            with dl_area:
-                if os.path.exists(fname):
-                    c1, c2 = st.columns([0.75, 0.25])
-                    c1.write(f"✅ {cap['title']}")
-                    with open(fname, "rb") as f:
-                        c2.download_button(label="📥 Baixar", data=f.read(), file_name=f"{track:03d}.mp3", key=f"dl_{track}")
-            
+            if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
+                # Guarda na memória fixa os dados do capítulo gerado
+                with open(fname, "rb") as f:
+                    st.session_state.chapters_generated.append({
+                        "title": cap['title'],
+                        "data": f.read(),
+                        "track": track
+                    })
             progress.progress(track / len(chapters))
         
-        # Consolidação final do ZIP
-        files_list = [f"out/{i+1:03d}.mp3" for i in range(len(chapters)) if os.path.exists(f"out/{i+1:03d}.mp3")]
-        if len(files_list) == len(chapters):
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, 'w') as zf:
-                for f in files_list: zf.write(f, os.path.basename(f))
-            st.session_state.zip_buffer = buffer.getvalue()
-            st.session_state.book_ready = True
-            st.session_state.gerando = False
-            st.success("✅ Geração concluída!")
+        # Cria o ZIP
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as zf:
+            for item in st.session_state.chapters_generated:
+                zf.writestr(f"{item['track']:03d}.mp3", item['data'])
+        
+        st.session_state.zip_buffer = buffer.getvalue()
+        st.session_state.book_ready = True
+        st.success("✅ Geração concluída!")
 
-# --- DOWNLOAD PERSISTENTE (ZIP) ---
+# --- ÁREA DE DOWNLOAD (PERSISTENTE) ---
+if st.session_state.chapters_generated:
+    st.write("---")
+    st.subheader("📥 Downloads Individuais")
+    for item in st.session_state.chapters_generated:
+        c1, c2 = st.columns([0.75, 0.25])
+        c1.write(f"✅ {item['title']}")
+        c2.download_button(
+            label="Baixar", 
+            data=item["data"], 
+            file_name=f"{item['track']:03d}_{item['title'][:20]}.mp3", 
+            key=f"fixed_dl_{item['track']}"
+        )
+
 if st.session_state.book_ready and st.session_state.zip_buffer:
     st.write("---")
-    st.download_button(label="📥 BAIXAR LIVRO COMPLETO (.ZIP)", data=st.session_state.zip_buffer, file_name=f"{book_title.replace(' ', '_')}.zip", mime="application/zip")
-    if st.button("🗑️ Limpar geração"):
+    st.subheader("📦 Download Completo")
+    st.download_button(
+        label="📥 BAIXAR TUDO (.ZIP)", 
+        data=st.session_state.zip_buffer, 
+        file_name=f"{book_title.replace(' ', '_')}.zip", 
+        mime="application/zip"
+    )
+    if st.button("🗑️ Limpar tudo"):
         st.session_state.zip_buffer = None
         st.session_state.book_ready = False
-        import shutil
-        shutil.rmtree("out", ignore_errors=True)
+        st.session_state.chapters_generated = []
         st.rerun()
