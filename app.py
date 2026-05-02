@@ -49,7 +49,7 @@ VOICES = {
     "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
 }
 
-# CSS para Cabeçalho Compacto e Estilização
+# CSS para Cabeçalho e Estilização
 st.markdown(f"""
     <style>
         #MainMenu {{visibility: hidden;}}
@@ -57,24 +57,11 @@ st.markdown(f"""
         header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
         
         .header-container {{
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 10px;
+            display: flex; align-items: center; gap: 15px; margin-bottom: 10px;
         }}
-        .header-logo {{
-            width: 70px;
-            border-radius: 12px;
-        }}
-        .header-text h1 {{
-            margin: 0;
-            font-size: 1.6rem;
-        }}
-        .header-text p {{
-            margin: 0;
-            font-size: 0.9rem;
-            color: gray;
-        }}
+        .header-logo {{ width: 70px; border-radius: 12px; }}
+        .header-text h1 {{ margin: 0; font-size: 1.6rem; }}
+        .header-text p {{ margin: 0; font-size: 0.9rem; color: gray; }}
 
         .main .block-container {{
             max-width: 900px; padding-top: 1rem; padding-bottom: 2rem;
@@ -186,7 +173,6 @@ with c_info3:
 
 book_author = st.text_input("Autor", "Narrador.AI")
 
-# Lógica de Atividade para Leitura de Arquivo
 chapters = []
 if input_method == "Arquivo":
     file = st.file_uploader("Upload do arquivo", type=["pdf", "epub", "docx", "txt"])
@@ -204,14 +190,11 @@ else:
             chapters, _ = split_text_regex(manual_text)
             status_manual.update(label="Análise concluída!", state="complete", expanded=False)
 
-# Botões de Ação
 st.write("")
 btn_col1, btn_col2 = st.columns(2)
 with btn_col1:
     if st.button("▶️ Ouvir Prévia"):
-        frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
-        preview_text = frases[st.session_state.frase_idx % len(frases)]
-        st.session_state.frase_idx += 1
+        preview_text = "Preparado para dar vida a mais uma história?"
         asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
         st.audio("preview.mp3")
 
@@ -223,33 +206,45 @@ with btn_col2:
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# Processamento Principal
+# --- GERAÇÃO COM FEEDBACK ANIMADO ---
 if chapters:
     st.info(f"Identificadas {len(chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
-        progress = st.progress(0)
-        status_gen = st.empty()
-        if not os.path.exists("out"): os.makedirs("out")
+        progress_bar = st.progress(0)
         
-        for i, cap in enumerate(chapters):
-            track = i + 1
-            fname = f"out/{track:03d}.mp3"
-            status_gen.text(f"Gerando áudio: {cap['title']}")
-            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
-            if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
-                with open(fname, "rb") as f:
-                    st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
-            progress.progress(track / len(chapters))
+        # Container de status dinâmico
+        with st.status("Iniciando motor de voz...", expanded=True) as status_gen:
+            if not os.path.exists("out"): os.makedirs("out")
+            
+            for i, cap in enumerate(chapters):
+                track = i + 1
+                fname = f"out/{track:03d}.mp3"
+                
+                # Atualiza a mensagem dentro do card animado
+                status_gen.write(f"🎙️ Narrando: {cap['title']}...")
+                
+                tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
+                
+                if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
+                    with open(fname, "rb") as f:
+                        st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
+                
+                progress_bar.progress(track / len(chapters))
+            
+            # Finalização do card animado
+            status_gen.update(label="Vozes geradas com sucesso!", state="complete", expanded=False)
         
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w') as zf:
-            for item in st.session_state.chapters_generated:
-                zf.writestr(f"{item['track']:03d}.mp3", item['data'])
-        st.session_state.zip_buffer = buffer.getvalue()
-        st.session_state.book_ready = True
-        status_gen.empty()
-        st.success("Geração Concluída!")
+        # Criação do ZIP
+        with st.spinner("Compactando arquivos..."):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as zf:
+                for item in st.session_state.chapters_generated:
+                    zf.writestr(f"{item['track']:03d}.mp3", item['data'])
+            st.session_state.zip_buffer = buffer.getvalue()
+            st.session_state.book_ready = True
+        
+        st.success("Tudo pronto! Seu audiobook está disponível abaixo.")
 
 # Área de Downloads
 if st.session_state.chapters_generated:
