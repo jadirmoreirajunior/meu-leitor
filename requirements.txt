@@ -6,3 +6,4 @@ beautifulsoup4
 mutagen
 gTTS
 asyncio
+python-docx
