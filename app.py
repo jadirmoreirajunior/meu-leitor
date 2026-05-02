@@ -57,8 +57,8 @@ st.markdown(f"""
     <meta property="og:image" content="{ICON_URL}">
     """, unsafe_allow_html=True)
 
-# --- CONFIGURAÇÕES DE VOZ ---
-VOICES = {{
+# --- CONFIGURAÇÕES DE VOZ (CORRIGIDO: CHAVES SIMPLES) ---
+VOICES = {
     "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
     "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
     "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
@@ -68,7 +68,7 @@ VOICES = {{
     "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
     "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
     "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
-}}
+}
 
 # --- FUNÇÕES DE EXTRAÇÃO ---
 def extract_text_docx(file):
@@ -98,7 +98,7 @@ def extract_text_epub(file):
             for tag in soup(['img', 'svg']): tag.decompose()
             text = soup.get_text(separator="\n")
             if text.strip() and len(text) > 300:
-                chapters.append({{"title": f"Parte {{len(chapters)+1:02d}}", "content": text.strip()}})
+                chapters.append({"title": f"Parte {len(chapters)+1:02d}", "content": text.strip()})
         return chapters, "Estrutura EPUB"
     finally:
         if os.path.exists("temp.epub"): os.remove("temp.epub")
@@ -113,7 +113,7 @@ def split_text_regex(text):
             end = matches[i+1].start() if i+1 < len(matches) else len(text)
             title = matches[i].group().strip()
             content = text[start:end].strip()
-            if len(content) > 300: chapters.append({{"title": title, "content": content}})
+            if len(content) > 300: chapters.append({"title": title, "content": content})
         return chapters, "Regex"
     
     chunks = []
@@ -125,7 +125,7 @@ def split_text_regex(text):
             last_p = text.rfind('.', curr_idx, end_idx)
             if last_p != -1 and last_p > curr_idx + 2000: end_idx = last_p + 1
         chunk = text[curr_idx:end_idx].strip()
-        if chunk: chunks.append({{"title": f"Parte {{len(chunks)+1:03d}}", "content": chunk}})
+        if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
         curr_idx = end_idx
     return chunks, "Blocos"
 
@@ -161,7 +161,7 @@ def play_voice_preview(voice_id):
     except: return None
 
 # --- INTERFACE ---
-st.title(f"🎧 {{APP_NAME}}")
+st.title(f"🎧 {APP_NAME}")
 st.markdown("#### Audiobooks de alta qualidade a partir de PDF, EPUB, DOCX e TXT.")
 
 with st.sidebar:
@@ -174,8 +174,7 @@ with st.sidebar:
     if input_method == "Arquivo":
         file = st.file_uploader("Upload", type=["pdf", "epub", "docx", "txt"])
     else:
-        # AQUI O AJUSTE MOBILE: O texto é capturado assim que você clica fora ou no botão
-        manual_text = st.text_area("Digite ou cole seu texto:", height=300, help="No celular, basta digitar e clicar em 'Iniciar Geração' abaixo.")
+        manual_text = st.text_area("Digite ou cole seu texto:", height=300)
 
     voice_label = st.selectbox("Voz", list(VOICES.keys()))
     if st.button("▶️ Demonstração"):
@@ -198,7 +197,7 @@ elif input_method == "Texto Manual" and manual_text:
     chapters, method = split_text_regex(manual_text)
 
 if chapters:
-    st.info(f"Identificadas {{len(chapters)}} partes.")
+    st.info(f"Identificadas {len(chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
@@ -207,18 +206,18 @@ if chapters:
         
         for i, cap in enumerate(chapters):
             track = i + 1
-            fname = f"out/{{track:03d}}.mp3"
-            status.text(f"Gerando: {{cap['title']}}")
-            tags = {{'title': f"{{book_title}} - {{cap['title']}}", 'author': book_author, 'track': track}}
+            fname = f"out/{track:03d}.mp3"
+            status.text(f"Gerando: {cap['title']}")
+            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track}
             if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                 with open(fname, "rb") as f:
-                    st.session_state.chapters_generated.append({{"title": cap['title'], "data": f.read(), "track": track}})
+                    st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
             progress.progress(track / len(chapters))
         
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w') as zf:
             for item in st.session_state.chapters_generated:
-                zf.writestr(f"{{item['track']:03d}}.mp3", item['data'])
+                zf.writestr(f"{item['track']:03d}.mp3", item['data'])
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
         st.success("Concluído!")
@@ -229,8 +228,8 @@ if st.session_state.chapters_generated:
     for item in st.session_state.chapters_generated:
         c1, c2 = st.columns([0.8, 0.2])
         c1.write(item['title'])
-        c2.download_button("Baixar", item["data"], f"{{item['track']:03d}}.mp3", key=f"dl_{{item['track']}}")
+        c2.download_button("Baixar", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
 
 if st.session_state.book_ready:
     st.divider()
-    st.download_button("📥 BAIXAR TUDO (.ZIP)", st.session_state.zip_buffer, f"{{book_title}}.zip")
+    st.download_button("📥 BAIXAR TUDO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
