@@ -36,7 +36,7 @@ if "frase_idx" not in st.session_state:
 if "chapters_generated" not in st.session_state:
     st.session_state.chapters_generated = []
 
-# --- DICIONÁRIO DE VOZES (RESTAURADO) ---
+# --- DICIONÁRIO DE VOZES ---
 VOICES = {
     "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
     "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
@@ -163,7 +163,6 @@ def generate_audio(text, voice, filename, tags):
 
 # --- INTERFACE ---
 
-# Cabeçalho Compacto
 st.markdown(f"""
     <div class="header-container">
         <img src="{ICON_URL}" class="header-logo">
@@ -174,11 +173,9 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# Bloco de Configuração
 st.write("---")
 input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
 
-# Grid de informações do livro
 c_info1, c_info2, c_info3 = st.columns([2, 1, 1.5])
 with c_info1:
     book_title = st.text_input("Título", "Meu Audiobook")
@@ -189,12 +186,23 @@ with c_info3:
 
 book_author = st.text_input("Autor", "Narrador.AI")
 
+# Lógica de Atividade para Leitura de Arquivo
+chapters = []
 if input_method == "Arquivo":
     file = st.file_uploader("Upload do arquivo", type=["pdf", "epub", "docx", "txt"])
-    manual_text = ""
+    if file:
+        with st.status("Lendo e processando arquivo...", expanded=True) as status_leitura:
+            if file.name.endswith(".pdf"): chapters, _ = split_text_regex(extract_text_pdf(file))
+            elif file.name.endswith(".epub"): chapters, _ = extract_text_epub(file)
+            elif file.name.endswith(".docx"): chapters, _ = split_text_regex(extract_text_docx(file))
+            elif file.name.endswith(".txt"): chapters, _ = split_text_regex(extract_text_txt(file))
+            status_leitura.update(label="Leitura concluída!", state="complete", expanded=False)
 else:
     manual_text = st.text_area("Digite ou cole seu texto aqui...", height=250)
-    file = None
+    if manual_text:
+        with st.status("Analisando texto...", expanded=True) as status_manual:
+            chapters, _ = split_text_regex(manual_text)
+            status_manual.update(label="Análise concluída!", state="complete", expanded=False)
 
 # Botões de Ação
 st.write("")
@@ -215,29 +223,19 @@ with btn_col2:
         if os.path.exists("out"): shutil.rmtree("out")
         st.rerun()
 
-# --- LÓGICA DE PROCESSAMENTO ---
-chapters = []
-if input_method == "Arquivo" and file:
-    if file.name.endswith(".pdf"): chapters, _ = split_text_regex(extract_text_pdf(file))
-    elif file.name.endswith(".epub"): chapters, _ = extract_text_epub(file)
-    elif file.name.endswith(".docx"): chapters, _ = split_text_regex(extract_text_docx(file))
-    elif file.name.endswith(".txt"): chapters, _ = split_text_regex(extract_text_txt(file))
-elif input_method == "Texto Manual" and manual_text:
-    chapters, _ = split_text_regex(manual_text)
-
-# Botão Unificado de Geração
+# Processamento Principal
 if chapters:
     st.info(f"Identificadas {len(chapters)} partes.")
     if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
         st.session_state.chapters_generated = []
         progress = st.progress(0)
-        status = st.empty()
+        status_gen = st.empty()
         if not os.path.exists("out"): os.makedirs("out")
         
         for i, cap in enumerate(chapters):
             track = i + 1
             fname = f"out/{track:03d}.mp3"
-            status.text(f"Gerando: {cap['title']}")
+            status_gen.text(f"Gerando áudio: {cap['title']}")
             tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
             if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
                 with open(fname, "rb") as f:
@@ -250,7 +248,7 @@ if chapters:
                 zf.writestr(f"{item['track']:03d}.mp3", item['data'])
         st.session_state.zip_buffer = buffer.getvalue()
         st.session_state.book_ready = True
-        status.empty()
+        status_gen.empty()
         st.success("Geração Concluída!")
 
 # Área de Downloads
