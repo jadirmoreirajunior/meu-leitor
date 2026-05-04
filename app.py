@@ -5,264 +5,140 @@ import os
 import re
 import zipfile
 import io
+import json
 import shutil
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from gtts import gTTS
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
 
-# Tenta importar o suporte a Word
-try:
-    import docx
-    WORD_SUPPORT = True
-except ImportError:
-    WORD_SUPPORT = False
-
-# --- CONFIGURAÇÃO DE IDENTIDADE ---
 APP_NAME = "Narrador.AI"
-ICON_URL = "https://jadirmoreirajunior.github.io/meu-leitor/narrador.ai.png"
 
-st.set_page_config(page_title=APP_NAME, page_icon=ICON_URL, layout="wide")
+OUTPUT_DIR = "out"
+PROGRESS_FILE = "progress.json"
 
-# 1. INICIALIZAÇÃO DA MEMÓRIA
-if "zip_buffer" not in st.session_state:
-    st.session_state.zip_buffer = None
-if "book_ready" not in st.session_state:
-    st.session_state.book_ready = False
-if "frase_idx" not in st.session_state:
-    st.session_state.frase_idx = 0
-if "chapters_generated" not in st.session_state:
-    st.session_state.chapters_generated = []
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
-# --- DICIONÁRIO DE VOZES ---
-VOICES = {
-    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
-    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
-    "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
-    "Brian (Multilingue)": "en-US-BrianMultilingualNeural",
-    "Ava (Multilingue)": "en-US-AvaMultilingualNeural",
-    "Emma (Multilingue)": "en-US-EmmaMultilingualNeural",
-    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
-    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
-    "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
-}
+# ---------------- PROGRESSO ----------------
+def load_progress():
+    if os.path.exists(PROGRESS_FILE):
+        with open(PROGRESS_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-# CSS para Cabeçalho Compacto e Estilização
-st.markdown(f"""
-    <style>
-        #MainMenu {{visibility: hidden;}}
-        footer {{visibility: hidden;}}
-        header {{ background-color: rgba(0,0,0,0); height: 3rem; }}
-        
-        .header-container {{
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 10px;
-        }}
-        .header-logo {{
-            width: 70px;
-            border-radius: 12px;
-        }}
-        .header-text h1 {{
-            margin: 0;
-            font-size: 1.6rem;
-        }}
-        .header-text p {{
-            margin: 0;
-            font-size: 0.9rem;
-            color: gray;
-        }}
+def save_progress(progress):
+    with open(PROGRESS_FILE, "w") as f:
+        json.dump(progress, f)
 
-        .main .block-container {{
-            max-width: 900px; padding-top: 1rem; padding-bottom: 2rem;
-        }}
-        
-        .stButton>button {{
-            width: 100%; border-radius: 20px; height: 3em;
-            background-color: #0e1117; color: white; border: 1px solid #30363d; font-weight: bold;
-        }}
-        .stButton>button:hover {{ border-color: #f0ad4e; color: #f0ad4e; }}
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- FUNÇÕES TÉCNICAS ---
-def extract_text_docx(file):
-    if not WORD_SUPPORT: return "Erro: python-docx não instalado."
-    doc = docx.Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-def extract_text_txt(file):
-    return file.getvalue().decode("utf-8")
-
+# ---------------- EXTRAÇÃO ----------------
 def extract_text_pdf(file):
     reader = PdfReader(file)
-    return "\n".join([page.extract_text() or "" for page in reader.pages])
+    return "\n".join([p.extract_text() or "" for p in reader.pages])
 
-def extract_text_epub(file):
-    with open("temp.epub", "wb") as f: f.write(file.getbuffer())
-    try:
-        book = epub.read_epub("temp.epub")
-        chapters = []
-        for item in book.get_items_of_type(ITEM_DOCUMENT):
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            for tag in soup(['img', 'svg']): tag.decompose()
-            text = soup.get_text(separator="\n")
-            if text.strip() and len(text) > 300:
-                chapters.append({"title": f"Parte {len(chapters)+1:02d}", "content": text.strip()})
-        return chapters, "EPUB"
-    finally:
-        if os.path.exists("temp.epub"): os.remove("temp.epub")
-
-def split_text_regex(text):
-    pattern = r'^\s*(?:Capítulo|Chapter|Parte|Part)\s+(?:[IVXLCDM]+|\d+)'
-    matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
-    if len(matches) > 2:
-        chapters = []
-        for i in range(len(matches)):
-            start = matches[i].start()
-            end = matches[i+1].start() if i+1 < len(matches) else len(text)
-            chapters.append({"title": matches[i].group().strip(), "content": text[start:end].strip()})
-        return chapters, "Regex"
-    
+def split_text(text):
     chunks = []
-    max_chars = 5000
-    curr_idx = 0
-    while curr_idx < len(text):
-        end_idx = curr_idx + max_chars
-        if end_idx < len(text):
-            last_p = text.rfind('.', curr_idx, end_idx)
-            if last_p != -1 and last_p > curr_idx + 2000: end_idx = last_p + 1
-        chunk = text[curr_idx:end_idx].strip()
-        if chunk: chunks.append({"title": f"Parte {len(chunks)+1:03d}", "content": chunk})
-        curr_idx = end_idx
-    return chunks, "Automática"
+    size = 5000
+    i = 0
+    while i < len(text):
+        part = text[i:i+size]
+        chunks.append({"title": f"Parte {len(chunks)+1}", "content": part})
+        i += size
+    return chunks
 
-async def run_edge_tts(text, voice, filename):
+# ---------------- TTS ----------------
+async def run_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
 def generate_audio(text, voice, filename, tags):
-    text = text.replace('\xa0', ' ').strip()
-    if not text: return False
     try:
-        asyncio.run(run_edge_tts(text, voice, filename))
-        if os.path.exists(filename):
-            audio = MP3(filename, ID3=ID3)
-            try: audio.add_tags()
-            except: pass
-            audio.tags.add(TIT2(encoding=3, text=tags['title']))
-            audio.tags.add(TPE1(encoding=3, text=tags['author']))
-            audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
-            if tags.get('year'): audio.tags.add(TYER(encoding=3, text=str(tags['year'])))
-            audio.save()
-            return True
-    except: return False
+        asyncio.run(run_tts(text, voice, filename))
 
-# --- INTERFACE ---
+        audio = MP3(filename, ID3=ID3)
+        try:
+            audio.add_tags()
+        except:
+            pass
 
-st.markdown(f"""
-    <div class="header-container">
-        <img src="{ICON_URL}" class="header-logo">
-        <div class="header-text">
-            <h1>{APP_NAME}</h1>
-            <p>Audiobooks neurais para PDF, EPUB, DOCX e TXT</p>
-        </div>
-    </div>
-""", unsafe_allow_html=True)
+        audio.tags.add(TIT2(encoding=3, text=tags['title']))
+        audio.tags.add(TPE1(encoding=3, text=tags['author']))
+        audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
 
-st.write("---")
-input_method = st.radio("Método de Entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
+        audio.save()
+        return True
+    except Exception as e:
+        print(e)
+        return False
 
-c_info1, c_info2, c_info3 = st.columns([2, 1, 1.5])
-with c_info1:
-    book_title = st.text_input("Título", "Meu Audiobook")
-with c_info2:
-    book_year = st.text_input("Ano", "")
-with c_info3:
-    voice_label = st.selectbox("Voz", list(VOICES.keys()))
+# ---------------- UI ----------------
+st.title(APP_NAME)
 
-book_author = st.text_input("Autor", "Narrador.AI")
+file = st.file_uploader("Envie seu PDF", type=["pdf"])
 
-# Lógica de Atividade para Leitura de Arquivo
-chapters = []
-if input_method == "Arquivo":
-    file = st.file_uploader("Upload do arquivo", type=["pdf", "epub", "docx", "txt"])
-    if file:
-        with st.status("Lendo e processando arquivo...", expanded=True) as status_leitura:
-            if file.name.endswith(".pdf"): chapters, _ = split_text_regex(extract_text_pdf(file))
-            elif file.name.endswith(".epub"): chapters, _ = extract_text_epub(file)
-            elif file.name.endswith(".docx"): chapters, _ = split_text_regex(extract_text_docx(file))
-            elif file.name.endswith(".txt"): chapters, _ = split_text_regex(extract_text_txt(file))
-            status_leitura.update(label="Leitura concluída!", state="complete", expanded=False)
-else:
-    manual_text = st.text_area("Digite ou cole seu texto aqui...", height=250)
-    # Adicionamos este botão para usuários de celular
-    if st.button("📝 Processar Texto Digitado"):
-        if manual_text:
-            with st.status("Analisando texto...", expanded=True) as status_manual:
-                chapters, _ = split_text_regex(manual_text)
-                status_manual.update(label="Análise concluída!", state="complete", expanded=False)
-        else:
-            st.warning("Por favor, digite algum texto primeiro.")
+book_title = st.text_input("Título", "Meu Livro")
+book_author = st.text_input("Autor", "Autor")
+voice = "pt-BR-FranciscaNeural"
 
-# Botões de Ação
-st.write("")
-btn_col1, btn_col2 = st.columns(2)
-with btn_col1:
-    if st.button("▶️ Ouvir Prévia"):
-        frases = ["Preparado para dar vida a mais uma história?", "Sua biblioteca, agora em áudio."]
-        preview_text = frases[st.session_state.frase_idx % len(frases)]
-        st.session_state.frase_idx += 1
-        asyncio.run(run_edge_tts(preview_text, VOICES[voice_label], "preview.mp3"))
-        st.audio("preview.mp3")
+if file:
+    text = extract_text_pdf(file)
+    chapters = split_text(text)
 
-with btn_col2:
-    if st.button("🗑️ Limpar Tudo"):
-        st.session_state.zip_buffer = None
-        st.session_state.book_ready = False
-        st.session_state.chapters_generated = []
-        if os.path.exists("out"): shutil.rmtree("out")
-        st.rerun()
+    st.success(f"{len(chapters)} partes detectadas")
 
-# Processamento Principal
-if chapters:
-    st.info(f"Identificadas {len(chapters)} partes.")
-    if st.button("🚀 INICIAR GERAÇÃO COMPLETA"):
-        st.session_state.chapters_generated = []
-        progress = st.progress(0)
-        status_gen = st.empty()
-        if not os.path.exists("out"): os.makedirs("out")
-        
+    if st.button("🚀 Gerar / Continuar"):
+        progress = load_progress()
+
         for i, cap in enumerate(chapters):
             track = i + 1
-            fname = f"out/{track:03d}.mp3"
-            status_gen.text(f"Gerando áudio: {cap['title']}")
-            tags = {'title': f"{book_title} - {cap['title']}", 'author': book_author, 'track': track, 'year': book_year}
-            if generate_audio(cap['content'], VOICES[voice_label], fname, tags):
-                with open(fname, "rb") as f:
-                    st.session_state.chapters_generated.append({"title": cap['title'], "data": f.read(), "track": track})
-            progress.progress(track / len(chapters))
-        
+            fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
+
+            # 🔥 PULA SE JÁ EXISTE
+            if os.path.exists(fname):
+                continue
+
+            st.write(f"Gerando {track}...")
+
+            tags = {
+                "title": f"{book_title} - {cap['title']}",
+                "author": book_author,
+                "track": track
+            }
+
+            ok = generate_audio(cap["content"], voice, fname, tags)
+
+            if ok:
+                progress[str(track)] = True
+                save_progress(progress)
+            else:
+                st.error(f"Erro no capítulo {track}")
+                break
+
+        st.success("Processo finalizado ou pausado")
+
+# ---------------- DOWNLOAD ----------------
+st.write("## Downloads")
+
+files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
+
+for f in files:
+    with open(os.path.join(OUTPUT_DIR, f), "rb") as audio:
+        st.download_button(f"Baixar {f}", audio, f)
+
+# ZIP
+if files:
+    if st.button("📦 Gerar ZIP"):
         buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w') as zf:
-            for item in st.session_state.chapters_generated:
-                zf.writestr(f"{item['track']:03d}.mp3", item['data'])
-        st.session_state.zip_buffer = buffer.getvalue()
-        st.session_state.book_ready = True
-        status_gen.empty()
-        st.success("Geração Concluída!")
+        with zipfile.ZipFile(buffer, "w") as z:
+            for f in files:
+                z.write(os.path.join(OUTPUT_DIR, f), f)
+        st.download_button("Baixar ZIP", buffer.getvalue(), "livro.zip")
 
-# Área de Downloads
-if st.session_state.chapters_generated:
-    st.write("---")
-    st.subheader("📥 Downloads")
-    for item in st.session_state.chapters_generated:
-        with st.expander(f"Parte {item['track']}: {item['title']}"):
-            st.download_button("Baixar MP3", item["data"], f"{item['track']:03d}.mp3", key=f"dl_{item['track']}")
-
-if st.session_state.book_ready:
-    st.write("---")
-    st.download_button("📥 BAIXAR LIVRO COMPLETO (.ZIP)", st.session_state.zip_buffer, f"{book_title}.zip")
+# ---------------- LIMPAR ----------------
+if st.button("🗑️ Limpar Tudo"):
+    if os.path.exists(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
+    if os.path.exists(PROGRESS_FILE):
+        os.remove(PROGRESS_FILE)
+    st.rerun()
