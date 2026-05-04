@@ -2,11 +2,13 @@ import streamlit as st
 import asyncio
 import edge_tts
 import os
-import re
 import zipfile
 import io
 import json
 import shutil
+import requests
+from io import BytesIO
+from PIL import Image
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
@@ -21,7 +23,17 @@ except:
     WORD_SUPPORT = False
 
 APP_NAME = "Narrador.AI"
-st.set_page_config(page_title=APP_NAME, page_icon="🎧", layout="wide")
+
+# 🔥 LOGO VIA GITHUB (COM FALLBACK)
+ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
+
+try:
+    response = requests.get(ICON_URL)
+    icon = Image.open(BytesIO(response.content))
+except:
+    icon = "🎧"
+
+st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
 
 OUTPUT_DIR = "out"
 PROGRESS_FILE = "progress.json"
