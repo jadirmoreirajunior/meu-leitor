@@ -24,9 +24,10 @@ except:
 
 APP_NAME = "Narrador.AI"
 
-# 🔥 LOGO VIA GITHUB (COM FALLBACK)
+# 🔥 LOGO
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
 
+# favicon (aba do navegador)
 try:
     response = requests.get(ICON_URL)
     icon = Image.open(BytesIO(response.content))
@@ -35,13 +36,21 @@ except:
 
 st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
 
+# 🔥 HEADER COM LOGO
+st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <img src="{ICON_URL}" width="60" style="border-radius:12px;">
+        <h1 style="margin:0;">Narrador.AI</h1>
+    </div>
+""", unsafe_allow_html=True)
+
 OUTPUT_DIR = "out"
 PROGRESS_FILE = "progress.json"
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
-# ---------------- VOZES ----------------
+# VOZES
 VOICES = {
     "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
     "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
@@ -52,7 +61,7 @@ VOICES = {
     "Emma (Multilingue)": "en-US-EmmaMultilingualNeural"
 }
 
-# ---------------- PROGRESSO ----------------
+# PROGRESSO
 def load_progress():
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
@@ -63,7 +72,7 @@ def save_progress(progress):
     with open(PROGRESS_FILE, "w") as f:
         json.dump(progress, f)
 
-# ---------------- EXTRAÇÃO ----------------
+# EXTRAÇÃO
 def extract_text_pdf(file):
     reader = PdfReader(file)
     return "\n".join([p.extract_text() or "" for p in reader.pages])
@@ -95,7 +104,7 @@ def extract_text_epub(file):
 
     return "\n\n".join(chapters)
 
-# ---------------- DIVISÃO ----------------
+# DIVISÃO
 def split_text(text):
     chunks = []
     size = 5000
@@ -111,7 +120,7 @@ def split_text(text):
 
     return chunks
 
-# ---------------- TTS ----------------
+# TTS
 async def run_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
@@ -136,9 +145,7 @@ def generate_audio(text, voice, filename, tags):
         print(e)
         return False
 
-# ---------------- UI ----------------
-st.title("🎧 Narrador.AI")
-
+# UI
 file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
 book_title = st.text_input("Título", "Meu Livro")
@@ -147,24 +154,23 @@ book_author = st.text_input("Autor", "Autor")
 voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
 voice = VOICES[voice_label]
 
-# ---------------- PRÉVIA ----------------
+# PRÉVIA
 if "preview_idx" not in st.session_state:
     st.session_state.preview_idx = 0
 
-if st.button("▶️ Ouvir Prévia da Voz"):
+if st.button("▶️ Ouvir Prévia"):
     frases = [
-        "Olá, este é um teste de voz do Narrador A I.",
-        "Transformando textos em experiências incríveis de áudio.",
-        "Agora você pode ouvir seus livros favoritos."
+        "Olá, este é um teste de voz.",
+        "Transformando textos em áudio.",
+        "Seu audiobook começa aqui."
     ]
-
     texto = frases[st.session_state.preview_idx % len(frases)]
     st.session_state.preview_idx += 1
 
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-# ---------------- PROCESSAMENTO ----------------
+# PROCESSAMENTO
 chapters = []
 
 if file:
@@ -183,7 +189,6 @@ if file:
         chapters = split_text(text)
         st.success(f"{len(chapters)} partes identificadas")
 
-# ---------------- GERAR ----------------
 if chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
@@ -214,7 +219,7 @@ if chapters:
 
         st.success("Processo concluído ou pausado")
 
-# ---------------- DOWNLOAD ----------------
+# DOWNLOAD
 st.write("## Downloads")
 
 files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
@@ -232,12 +237,10 @@ if files:
 
         st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
-# ---------------- LIMPAR ----------------
+# LIMPAR
 if st.button("🗑️ Limpar Tudo"):
     if os.path.exists(OUTPUT_DIR):
         shutil.rmtree(OUTPUT_DIR)
-
     if os.path.exists(PROGRESS_FILE):
         os.remove(PROGRESS_FILE)
-
     st.rerun()
