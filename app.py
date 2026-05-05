@@ -176,8 +176,8 @@ def split_by_chapters(text):
         r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',     # Capítulo I, Capítulo 1
         r'^\s*chapter\s+\d+',                  # Chapter 1
         r'^\s*parte\s+\d+',                    # Parte 1
-        r'^\s*[ivxlcdm]{2,}$',                 # II, III, IV
-        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'           # TÍTULOS EM CAIXA ALTA
+        r'^\s*[ivxlcdm]+$',                    # II, III, IV
+        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'            # TÍTULOS EM CAIXA ALTA
     ]
 
     for i, line in enumerate(lines):
