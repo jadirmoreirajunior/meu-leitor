@@ -39,10 +39,17 @@ st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
 
 # HEADER
 st.markdown(f"""
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
     <img src="{ICON_URL}" width="60" style="border-radius:12px;">
     <h1 style="margin:0;">Narrador.AI</h1>
 </div>
+
+<p style="margin-top:0; color: gray;">
+Transforme seus livros em audiobooks com vozes neurais de alta qualidade.
+Envie arquivos PDF, EPUB, DOCX ou TXT — ou escreva seu próprio texto — e gere áudios automaticamente organizados por capítulos.
+Se o sistema conseguir identificar títulos e capítulos, possivelmente fará arquivos de áudio separado de acordo com estes capítulos, se não conseguir identificar, irá calcular tamanho médio para criação de audiobokk separado por partes.
+Se a geração de um áudiobook parar em algum momento, por instabilidade da internet ou por ter minimizado o navegador, clique novamente no botão Gerar, possivelmente ele continuará a geração de áudio a partir do capítulo ou parte onde parou.
+</p>
 """, unsafe_allow_html=True)
 
 OUTPUT_DIR = "out"
@@ -321,10 +328,10 @@ if st.session_state.chapters:
 
 # GERAÇÃO
 if st.session_state.chapters:
-    if st.button("🚀 Gerar / Continuar"):
-        progress = load_progress()
-        status = st.empty()
+if st.button("🚀 Gerar / Continuar"):
+    progress = load_progress()
 
+    with st.spinner("🎧 Gerando audiobook... isso pode levar alguns minutos"):
         for i, cap in enumerate(st.session_state.chapters):
             track = i + 1
             safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
@@ -332,10 +339,6 @@ if st.session_state.chapters:
 
             if os.path.exists(fname):
                 continue
-
-            for dots in ["", ".", "..", "..."]:
-                status.text(f"Gerando áudio{dots} ({track})")
-                time.sleep(0.2)
 
             tags = {
                 "title": f"{book_title} - {cap['title']}",
@@ -352,8 +355,8 @@ if st.session_state.chapters:
                 st.error(f"Erro na parte {track}")
                 break
 
-        status.text("Finalizado ✅")
-        st.session_state.chapters = []
+    st.success("✅ Geração concluída!")
+    st.session_state.chapters = []
 
 # DOWNLOAD
 st.write("## Downloads")
@@ -365,20 +368,15 @@ for f in files:
         st.download_button(f"Baixar {f}", audio, f)
 
 if files:
-    if st.button("📦 Gerar ZIP"):
-        status_zip = st.empty()
-
-        for dots in ["", ".", "..", "..."]:
-            status_zip.text(f"Gerando ZIP{dots}")
-            time.sleep(0.3)
-
+if st.button("📦 Gerar ZIP"):
+    with st.spinner("📦 Gerando arquivo ZIP..."):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as z:
             for f in files:
                 z.write(os.path.join(OUTPUT_DIR, f), f)
 
-        status_zip.text("ZIP pronto ✅")
-        st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
+    st.success("✅ ZIP pronto!")
+    st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
 # LIMPAR
 if st.button("🗑️ Limpar Tudo"):
