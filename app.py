@@ -14,28 +14,28 @@ from PIL import Image
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from mutagen.id3 import ID3, TIT2, TPE1, TRCK
+from mutagen.id3 import ID3, TIT2, TPE1, TRCK, TYER
 from mutagen.mp3 import MP3
 
-# DOCX
+# Tenta importar DOCX de forma segura
 try:
     import docx
     WORD_SUPPORT = True
-except:
+except ImportError:
     WORD_SUPPORT = False
 
 APP_NAME = "Narrador.AI"
-
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
 
-# favicon
-try:
-    response = requests.get(ICON_URL)
-    icon = Image.open(BytesIO(response.content))
-except:
-    icon = "🎧"
+# Configuração da página com tratamento de erro robusto para o ícone
+def get_icon():
+    try:
+        res = requests.get(ICON_URL, timeout=5)
+        return Image.open(BytesIO(res.content))
+    except:
+        return "🎧"
 
-st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
+st.set_page_config(page_title=APP_NAME, page_icon=get_icon(), layout="wide")
 
 # HEADER
 st.markdown(f"""
