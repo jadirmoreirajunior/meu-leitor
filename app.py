@@ -226,27 +226,30 @@ def extract_text_epub(file):
 
         chapters = []
 
-        # 🔥 1. TENTAR POR HEADINGS (nível Kindle)
-        for item_id, _ in book.spine:
-            item = book.get_item_with_id(item_id)
+        # 🔥 FUNÇÃO SEGURA PARA PEGAR ITEM DO SPINE
+        def get_item(spine_item):
+            if isinstance(spine_item, tuple):
+                return book.get_item_with_id(spine_item[0])
+            return book.get_item_with_id(spine_item)
+
+        # 🔥 1. DETECÇÃO POR HEADINGS (estilo Kindle)
+        for spine_item in book.spine:
+            item = get_item(spine_item)
 
             if not item:
                 continue
 
             soup = BeautifulSoup(item.get_content(), "html.parser")
 
-            # remove lixo
             for tag in soup(["script", "style", "img", "svg"]):
                 tag.decompose()
 
-            # 🎯 procurar títulos reais
             headings = soup.find_all(["h1", "h2"])
 
             if headings:
-                for idx, h in enumerate(headings):
+                for h in headings:
                     title = h.get_text().strip()
 
-                    # pega conteúdo até próximo heading
                     content = []
                     for sibling in h.find_next_siblings():
                         if sibling.name in ["h1", "h2"]:
@@ -261,15 +264,16 @@ def extract_text_epub(file):
                             "content": text
                         })
 
-        # 🎯 VALIDAÇÃO (se encontrou capítulos bons)
+        # 🎯 VALIDAÇÃO
         if 3 <= len(chapters) <= 50:
             return chapters
 
-        # 🔁 2. FALLBACK → SPINE COMPLETO + HÍBRIDO
+        # 🔁 FALLBACK
         texts = []
 
-        for item_id, _ in book.spine:
-            item = book.get_item_with_id(item_id)
+        for spine_item in book.spine:
+            item = get_item(spine_item)
+
             if item:
                 soup = BeautifulSoup(item.get_content(), "html.parser")
                 text = soup.get_text(separator="\n").strip()
@@ -281,9 +285,14 @@ def extract_text_epub(file):
 
         return split_hybrid(full_text)
 
+    except Exception as e:
+        st.error(f"Erro ao processar EPUB: {str(e)}")
+        return []
+
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
+            
 # TTS
 async def run_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
