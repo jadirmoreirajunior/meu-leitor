@@ -153,6 +153,20 @@ def extract_text_epub(file):
 
 # 🔥 NOVA FUNÇÃO INTELIGENTE
 def split_by_chapters(text):
+    import re
+
+    # 🔥 GARANTIA: sempre string
+    if isinstance(text, list):
+        try:
+            text = "\n\n".join(
+                [item["content"] if isinstance(item, dict) else str(item) for item in text]
+            )
+        except:
+            text = str(text)
+
+    if not isinstance(text, str):
+        text = str(text)
+
     pattern = r'^\s*(Cap[ií]tulo|Chapter|Parte)\s+([IVXLCDM]+|\d+).*'
     matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
 
@@ -172,7 +186,6 @@ def split_by_chapters(text):
 
         return chapters
 
-    # fallback
     return split_text(text)
 
 # DIVISÃO PADRÃO
@@ -245,8 +258,16 @@ if input_mode == "Arquivo":
     if file:
         if file.name.endswith(".pdf"):
             text = extract_text_pdf(file)
-        elif file.name.endswith(".epub"):
-            text = extract_text_epub(file)
+elif file.name.endswith(".epub"):
+    result = extract_text_epub(file)
+
+    # 🔥 Se já vier como capítulos estruturados
+    if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+            st.session_state.chapters = result
+            st.success(f"{len(result)} capítulos identificados")
+            text = None
+        else:
+            text = result
         elif file.name.endswith(".docx"):
             text = extract_text_docx(file)
         elif file.name.endswith(".txt"):
@@ -254,9 +275,9 @@ if input_mode == "Arquivo":
         else:
             text = ""
 
-        if text:
-            st.session_state.chapters = split_by_chapters(text)
-            st.success(f"{len(st.session_state.chapters)} partes identificadas")
+if text:
+    st.session_state.chapters = split_by_chapters(text)
+    st.success(f"{len(st.session_state.chapters)} partes identificadas")
 
 else:
     manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
