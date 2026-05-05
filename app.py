@@ -24,9 +24,9 @@ except:
 
 APP_NAME = "Narrador.AI"
 
-# LOGO
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
 
+# favicon
 try:
     response = requests.get(ICON_URL)
     icon = Image.open(BytesIO(response.content))
@@ -46,11 +46,15 @@ st.markdown(f"""
 OUTPUT_DIR = "out"
 PROGRESS_FILE = "progress.json"
 
-if "chapters" not in st.session_state:
-    st.session_state.chapters = []
-    
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
+
+# SESSION STATE
+if "chapters" not in st.session_state:
+    st.session_state.chapters = []
+
+if "preview_idx" not in st.session_state:
+    st.session_state.preview_idx = 0
 
 # VOZES
 VOICES = {
@@ -92,19 +96,19 @@ def extract_text_epub(file):
     with open("temp.epub", "wb") as f:
         f.write(file.getbuffer())
 
-    chapters = []
+    texts = []
     try:
         book = epub.read_epub("temp.epub")
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             soup = BeautifulSoup(item.get_content(), 'html.parser')
             text = soup.get_text(separator="\n").strip()
-            if len(text) > 300:
-                chapters.append(text)
+            if len(text) > 200:
+                texts.append(text)
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
 
-    return "\n\n".join(chapters)
+    return "\n\n".join(texts)
 
 # DIVISÃO
 def split_text(text):
@@ -144,7 +148,7 @@ def generate_audio(text, voice, filename, tags):
 
         return True
     except Exception as e:
-        print(e)
+        st.error(str(e))
         return False
 
 # ---------------- UI ----------------
@@ -158,9 +162,6 @@ voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
 voice = VOICES[voice_label]
 
 # PRÉVIA
-if "preview_idx" not in st.session_state:
-    st.session_state.preview_idx = 0
-
 if st.button("▶️ Ouvir Prévia"):
     frases = [
         "Olá, este é um teste de voz.",
@@ -173,9 +174,8 @@ if st.button("▶️ Ouvir Prévia"):
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-chapters = st.session_state.chapters
+# --------- ENTRADA ---------
 
-# --------- MODO ARQUIVO ---------
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
@@ -205,19 +205,8 @@ else:
         else:
             st.warning("Digite algum texto primeiro.")
 
-# --------- MODO TEXTO ---------
-else:
-    manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
-
-    if st.button("📝 Processar Texto"):
-        if manual_text.strip():
-            st.session_state.chapters = split_text(manual_text)
-            st.success(f"{len(st.session_state.chapters)} partes identificadas")
-        else:
-            st.warning("Digite algum texto primeiro.")
-
-
 # --------- GERAÇÃO ---------
+
 if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
@@ -249,7 +238,8 @@ if st.session_state.chapters:
         st.success("Processo concluído ou pausado")
         st.session_state.chapters = []
 
-# DOWNLOAD
+# --------- DOWNLOAD ---------
+
 st.write("## Downloads")
 
 files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
@@ -267,7 +257,8 @@ if files:
 
         st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
-# LIMPAR
+# --------- LIMPAR ---------
+
 if st.button("🗑️ Limpar Tudo"):
     if os.path.exists(OUTPUT_DIR):
         shutil.rmtree(OUTPUT_DIR)
