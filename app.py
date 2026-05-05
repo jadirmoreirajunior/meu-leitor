@@ -292,6 +292,16 @@ else:
         else:
             st.warning("Digite algum texto primeiro.")
 
+
+# --------- VISUALIZAÇÃO DOS CAPÍTULOS ---------
+
+if st.session_state.chapters:
+    st.write("## 📚 Capítulos identificados")
+
+    with st.expander("Ver lista de capítulos"):
+        for i, cap in enumerate(st.session_state.chapters):
+            st.write(f"{i+1:02d} - {cap['title']}")
+            
 # GERAÇÃO
 if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
