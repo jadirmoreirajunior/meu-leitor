@@ -102,38 +102,42 @@ def extract_text_epub(file):
     try:
         book = epub.read_epub("temp.epub")
 
-        # 🔥 TENTAR USAR O TOC (SUMÁRIO REAL)
+        # 🔥 USAR APENAS NÍVEL PRINCIPAL DO TOC
         toc = book.toc
 
-        def flatten_toc(toc_items):
-            result = []
-            for item in toc_items:
-                if isinstance(item, tuple):
-                    result.append(item[0])
-                    result.extend(flatten_toc(item[1]))
-                else:
-                    result.append(item)
-            return result
+        main_items = []
 
-        toc_items = flatten_toc(toc)
+        for item in toc:
+            # item pode ser (capítulo, subitens)
+            if isinstance(item, tuple):
+                main_items.append(item[0])  # só o principal
+            else:
+                main_items.append(item)
 
-        if toc_items:
-            for idx, item in enumerate(toc_items):
-                try:
-                    doc = book.get_item_with_href(item.href)
-                    soup = BeautifulSoup(doc.get_content(), "html.parser")
-                    text = soup.get_text(separator="\n").strip()
+        # 🔥 EXTRAIR SOMENTE CAPÍTULOS PRINCIPAIS
+        for idx, item in enumerate(main_items):
+            try:
+                doc = book.get_item_with_href(item.href)
+                soup = BeautifulSoup(doc.get_content(), "html.parser")
 
-                    if len(text) > 200:
-                        title = item.title if item.title else f"Capítulo {idx+1}"
-                        chapters.append({
-                            "title": title,
-                            "content": text
-                        })
-                except:
-                    continue
+                # remove scripts/imagens
+                for tag in soup(["script", "style", "img", "svg"]):
+                    tag.decompose()
 
-        # 🔁 FALLBACK: NÃO TEM TOC VÁLIDO
+                text = soup.get_text(separator="\n").strip()
+
+                if len(text) > 200:
+                    title = item.title.strip() if item.title else f"Capítulo {idx+1}"
+
+                    chapters.append({
+                        "title": title,
+                        "content": text
+                    })
+
+            except:
+                continue
+
+        # 🔁 FALLBACK se TOC falhar
         if len(chapters) < 3:
             texts = []
             for item in book.get_items_of_type(ITEM_DOCUMENT):
@@ -150,7 +154,7 @@ def extract_text_epub(file):
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
-
+            
 # 🔥 NOVA FUNÇÃO INTELIGENTE
 def split_by_chapters(text):
     import re
