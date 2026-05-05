@@ -43,8 +43,7 @@ st.markdown(f"""
 </div>
 
 <p style="color:gray;">
-Transforme livros em audiobooks automaticamente com vozes neurais.
-Envie PDF, EPUB, DOCX ou TXT — ou escreva manualmente — e gere áudios organizados.
+Transforme livros em audiobooks com vozes neurais. Envie arquivos ou escreva seu texto.
 </p>
 """, unsafe_allow_html=True)
 
@@ -54,16 +53,41 @@ PROGRESS_FILE = "progress.json"
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
+# SESSION
 if "chapters" not in st.session_state:
     st.session_state.chapters = []
 
+if "preview_idx" not in st.session_state:
+    st.session_state.preview_idx = 0
+
 # VOZES
 VOICES = {
-    "Francisca (BR)": "pt-BR-FranciscaNeural",
-    "Antonio (BR)": "pt-BR-AntonioNeural",
-    "Brenda (BR)": "pt-BR-BrendaNeural",
-    "Donato (BR)": "pt-BR-DonatoNeural"
+    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
+    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
+    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
+    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
+    "Fabio (Masculino - BR)": "pt-BR-FabioNeural"
 }
+
+# INPUTS
+book_title = st.text_input("Título do livro", "Meu Audiobook")
+book_author = st.text_input("Autor", "Autor")
+
+voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
+voice = VOICES[voice_label]
+
+# PRÉVIA
+if st.button("▶️ Ouvir Prévia"):
+    frases = [
+        "Olá, este é um teste de voz.",
+        "Transformando texto em áudio.",
+        "Seu audiobook começa agora."
+    ]
+    texto = frases[st.session_state.preview_idx % len(frases)]
+    st.session_state.preview_idx += 1
+
+    asyncio.run(edge_tts.Communicate(texto, voice).save("preview.mp3"))
+    st.audio("preview.mp3")
 
 # EXTRAÇÃO
 def extract_text_pdf(file):
@@ -100,7 +124,7 @@ def split_text(text):
 
     return chunks
 
-# DETECÇÃO SIMPLES
+# DETECÇÃO
 def split_by_chapters(text):
     lines = text.split("\n")
     indices = []
@@ -117,10 +141,9 @@ def split_by_chapters(text):
         start = indices[i]
         end = indices[i+1] if i+1 < len(indices) else len(lines)
 
-        content = "\n".join(lines[start:end])
         chapters.append({
             "title": lines[start],
-            "content": content
+            "content": "\n".join(lines[start:end])
         })
 
     return chapters
@@ -167,19 +190,28 @@ async def run_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
-def generate_audio(text, voice, filename):
+def generate_audio(text, voice, filename, tags):
     asyncio.run(run_tts(text, voice, filename))
 
-# UI
-input_mode = st.radio("Modo:", ["Arquivo", "Texto"], horizontal=True)
+    audio = MP3(filename, ID3=ID3)
+    try:
+        audio.add_tags()
+    except:
+        pass
 
-voice = VOICES[st.selectbox("Voz", list(VOICES.keys()))]
+    audio.tags.add(TIT2(encoding=3, text=tags['title']))
+    audio.tags.add(TPE1(encoding=3, text=tags['author']))
+    audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
+    audio.save()
+
+# INPUT
+input_mode = st.radio("Modo de entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
 
 file = None
 text = None
 
 if input_mode == "Arquivo":
-    file = st.file_uploader("Arquivo", type=["pdf","epub","docx","txt"])
+    file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
 if file:
     if file.name.endswith(".pdf"):
@@ -195,42 +227,59 @@ if file:
         st.session_state.chapters = split_hybrid(text)
 
 else:
-    manual = st.text_area("Texto")
+    manual_text = st.text_area("Digite o texto")
 
-    if st.button("Processar"):
-        st.session_state.chapters = split_hybrid(manual)
+    if st.button("📝 Processar Texto"):
+        st.session_state.chapters = split_hybrid(manual_text)
 
-# MOSTRAR CAPÍTULOS
+# LISTA
 if st.session_state.chapters:
-    st.write("Capítulos detectados:")
-    for c in st.session_state.chapters:
-        st.write("-", c["title"])
+    st.write("## Capítulos identificados")
+    for i, c in enumerate(st.session_state.chapters):
+        st.write(f"{i+1:02d} - {c['title']}")
 
-# GERAR
+# GERAÇÃO
 if st.session_state.chapters:
-    if st.button("Gerar"):
+    if st.button("🚀 Gerar / Continuar"):
         with st.spinner("Gerando áudio..."):
             for i, cap in enumerate(st.session_state.chapters):
                 fname = f"{OUTPUT_DIR}/{i+1:03d}.mp3"
-                generate_audio(cap["content"], voice, fname)
+
+                if os.path.exists(fname):
+                    continue
+
+                tags = {
+                    "title": f"{book_title} - {cap['title']}",
+                    "author": book_author,
+                    "track": i+1
+                }
+
+                generate_audio(cap["content"], voice, fname, tags)
 
         st.success("Concluído")
 
 # DOWNLOAD
-files = os.listdir(OUTPUT_DIR)
+files = sorted(os.listdir(OUTPUT_DIR))
 
 if files:
-    if st.button("Gerar ZIP"):
+    st.write("## Downloads")
+
+    for f in files:
+        with open(os.path.join(OUTPUT_DIR, f), "rb") as audio:
+            st.download_button(f"Baixar {f}", audio, f)
+
+    if st.button("📦 Gerar ZIP"):
         with st.spinner("Compactando..."):
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w") as z:
                 for f in files:
                     z.write(os.path.join(OUTPUT_DIR, f), f)
 
-        st.download_button("Baixar", buffer.getvalue(), "audiobook.zip")
+        st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
 # LIMPAR
-if st.button("Limpar"):
+if st.button("🗑️ Limpar Tudo"):
     shutil.rmtree(OUTPUT_DIR)
     os.makedirs(OUTPUT_DIR)
+    st.session_state.chapters = []
     st.rerun()
