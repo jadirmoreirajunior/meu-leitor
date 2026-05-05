@@ -327,37 +327,38 @@ if st.session_state.chapters:
             st.write(f"{i+1:02d} - {cap['title']}")
 
 # GERAÇÃO
+# GERAÇÃO
 if st.session_state.chapters:
-if st.button("🚀 Gerar / Continuar"):
-    progress = load_progress()
 
-    with st.spinner("🎧 Gerando audiobook... isso pode levar alguns minutos"):
-        for i, cap in enumerate(st.session_state.chapters):
-            track = i + 1
-            safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
-            fname = f"{OUTPUT_DIR}/{track:03d} - {safe_title}.mp3"
+    if st.button("🚀 Gerar / Continuar"):
+        progress = load_progress()
 
-            if os.path.exists(fname):
-                continue
+        with st.spinner("🎧 Gerando audiobook... isso pode levar alguns minutos"):
+            for i, cap in enumerate(st.session_state.chapters):
+                track = i + 1
+                safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
+                fname = f"{OUTPUT_DIR}/{track:03d} - {safe_title}.mp3"
 
-            tags = {
-                "title": f"{book_title} - {cap['title']}",
-                "author": book_author,
-                "track": track
-            }
+                if os.path.exists(fname):
+                    continue
 
-            ok = generate_audio(cap["content"], voice, fname, tags)
+                tags = {
+                    "title": f"{book_title} - {cap['title']}",
+                    "author": book_author,
+                    "track": track
+                }
 
-            if ok:
-                progress[str(track)] = True
-                save_progress(progress)
-            else:
-                st.error(f"Erro na parte {track}")
-                break
+                ok = generate_audio(cap["content"], voice, fname, tags)
 
-    st.success("✅ Geração concluída!")
-    st.session_state.chapters = []
+                if ok:
+                    progress[str(track)] = True
+                    save_progress(progress)
+                else:
+                    st.error(f"Erro na parte {track}")
+                    break
 
+        st.success("✅ Geração concluída!")
+        st.session_state.chapters = []
 # DOWNLOAD
 st.write("## Downloads")
 
