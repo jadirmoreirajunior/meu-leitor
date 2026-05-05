@@ -223,6 +223,49 @@ def extract_text_epub(file):
 
     try:
         book = epub.read_epub("temp.epub")
+
+        chapters = []
+
+        # 🔥 1. TENTAR POR HEADINGS (nível Kindle)
+        for item_id, _ in book.spine:
+            item = book.get_item_with_id(item_id)
+
+            if not item:
+                continue
+
+            soup = BeautifulSoup(item.get_content(), "html.parser")
+
+            # remove lixo
+            for tag in soup(["script", "style", "img", "svg"]):
+                tag.decompose()
+
+            # 🎯 procurar títulos reais
+            headings = soup.find_all(["h1", "h2"])
+
+            if headings:
+                for idx, h in enumerate(headings):
+                    title = h.get_text().strip()
+
+                    # pega conteúdo até próximo heading
+                    content = []
+                    for sibling in h.find_next_siblings():
+                        if sibling.name in ["h1", "h2"]:
+                            break
+                        content.append(sibling.get_text(" ", strip=True))
+
+                    text = " ".join(content).strip()
+
+                    if len(text) > 500:
+                        chapters.append({
+                            "title": title,
+                            "content": text
+                        })
+
+        # 🎯 VALIDAÇÃO (se encontrou capítulos bons)
+        if 3 <= len(chapters) <= 50:
+            return chapters
+
+        # 🔁 2. FALLBACK → SPINE COMPLETO + HÍBRIDO
         texts = []
 
         for item_id, _ in book.spine:
@@ -230,16 +273,17 @@ def extract_text_epub(file):
             if item:
                 soup = BeautifulSoup(item.get_content(), "html.parser")
                 text = soup.get_text(separator="\n").strip()
+
                 if len(text) > 200:
                     texts.append(text)
 
         full_text = "\n\n".join(texts)
+
         return split_hybrid(full_text)
 
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
-
 # TTS
 async def run_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
