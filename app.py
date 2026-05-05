@@ -127,27 +127,82 @@ def split_text(text):
 # DETECÇÃO
 def split_by_chapters(text):
     lines = text.split("\n")
-    indices = []
+
+    chapter_indices = []
+    titles = []
+
+    # ❌ palavras proibidas (não são capítulos)
+    blacklist = [
+        "agradecimentos",
+        "créditos",
+        "creditos",
+        "dedicatória",
+        "dedicatoria",
+        "prefácio",
+        "prefacio",
+        "sumário",
+        "sumario",
+        "índice",
+        "indice",
+        "introdução",
+        "introducao"
+    ]
+
+    # 🎯 padrões mais confiáveis
+    patterns = [
+        r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',
+        r'^\s*chapter\s+\d+',
+        r'^\s*parte\s+\d+',
+        r'^\s*[ivxlcdm]+$',  # I, II, III...
+    ]
 
     for i, line in enumerate(lines):
-        if re.match(r'^\s*(cap[ií]tulo|chapter|parte|[ivxlcdm]+)', line.lower()):
-            indices.append(i)
+        clean = line.strip().lower()
 
-    if len(indices) < 3:
+        if len(clean) < 3:
+            continue
+
+        # ❌ ignora lixo
+        if any(word in clean for word in blacklist):
+            continue
+
+        # 🎯 detecta padrão
+        for pattern in patterns:
+            if re.match(pattern, clean):
+                
+                # evita subtítulos próximos
+                if chapter_indices and (i - chapter_indices[-1] < 15):
+                    continue
+
+                chapter_indices.append(i)
+                titles.append(line.strip())
+                break
+
+    # 🎯 VALIDAÇÃO FINAL
+    chapters = []
+
+    if len(chapter_indices) >= 3:
+        for idx in range(len(chapter_indices)):
+            start = chapter_indices[idx]
+            end = chapter_indices[idx+1] if idx+1 < len(chapter_indices) else len(lines)
+
+            content = "\n".join(lines[start:end]).strip()
+
+            # ignora capítulos muito pequenos (erro comum)
+            if len(content) < 800:
+                continue
+
+            chapters.append({
+                "title": titles[idx],
+                "content": content
+            })
+
+    # 🔁 fallback inteligente
+    if len(chapters) < 3:
         return split_text(text)
 
-    chapters = []
-    for i in range(len(indices)):
-        start = indices[i]
-        end = indices[i+1] if i+1 < len(indices) else len(lines)
-
-        chapters.append({
-            "title": lines[start],
-            "content": "\n".join(lines[start:end])
-        })
-
     return chapters
-
+    
 # HÍBRIDO
 def split_hybrid(text):
     chapters = split_by_chapters(text)
