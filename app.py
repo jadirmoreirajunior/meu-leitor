@@ -179,21 +179,31 @@ chapters = st.session_state.chapters
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
-if file:
-    if file.name.endswith(".pdf"):
-        text = extract_text_pdf(file)
-    elif file.name.endswith(".epub"):
-        text = extract_text_epub(file)
-    elif file.name.endswith(".docx"):
-        text = extract_text_docx(file)
-    elif file.name.endswith(".txt"):
-        text = extract_text_txt(file)
-    else:
-        text = ""
+    if file:
+        if file.name.endswith(".pdf"):
+            text = extract_text_pdf(file)
+        elif file.name.endswith(".epub"):
+            text = extract_text_epub(file)
+        elif file.name.endswith(".docx"):
+            text = extract_text_docx(file)
+        elif file.name.endswith(".txt"):
+            text = extract_text_txt(file)
+        else:
+            text = ""
 
-    if text:
-        st.session_state.chapters = split_text(text)
-        st.success(f"{len(st.session_state.chapters)} partes identificadas")
+        if text:
+            st.session_state.chapters = split_text(text)
+            st.success(f"{len(st.session_state.chapters)} partes identificadas")
+
+else:
+    manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
+
+    if st.button("📝 Processar Texto"):
+        if manual_text.strip():
+            st.session_state.chapters = split_text(manual_text)
+            st.success(f"{len(st.session_state.chapters)} partes identificadas")
+        else:
+            st.warning("Digite algum texto primeiro.")
 
 # --------- MODO TEXTO ---------
 else:
