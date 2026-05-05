@@ -30,8 +30,9 @@ def apply_custom_css():
         .main { background-color: #0f111a; color: #ffffff; }
         .stButton>button { width: 100%; border-radius: 8px; background-color: #f08913; color: white; border: none; transition: 0.3s; }
         .stButton>button:hover { background-color: #ff9d2f; transform: scale(1.02); }
-        .chapter-card { background: #1a1d29; padding: 15px; border-radius: 10px; border-left: 5px solid #f08913; margin-bottom: 10px; font-size: 0.9rem; }
+        .chapter-card { background: #1a1d29; padding: 12px; border-radius: 10px; border-left: 5px solid #f08913; margin-bottom: 8px; font-size: 0.85rem; }
         .stTextInput>div>div>input, .stSelectbox>div>div>div { background-color: #1a1d29 !important; color: white !important; }
+        .stTextArea>div>div>textarea { background-color: #1a1d29 !important; color: white !important; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -60,27 +61,29 @@ VOICES = {
 
 def clean_text(text):
     if not text: return ""
+    # Remove múltiplos espaços e quebras de linha excessivas
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 def split_by_chapters(text):
     if not text: return []
     
-    # CORREÇÃO re.PatternError: Flag (?i) movida para o início da expressão
+    # PADRÕES SEM FLAG INTERNA (Evita o re.PatternError)
     patterns = [
-        r'(?i)\nCapítulo\s+[0-9]+', 
-        r'(?i)\nChapter\s+[0-9]+',
-        r'(?i)\nParte\s+[IVXLCDM0-9]+',
+        r'\nCapítulo\s+[0-9]+', 
+        r'\nChapter\s+[0-9]+',
+        r'\nParte\s+[IVXLCDM0-9]+',
         r'\n[0-9]+\.\s+[A-ZÁÉÍÓÚ]'
     ]
     
+    # Unindo os padrões
     combined_pattern = "|".join(patterns)
     
-    # Dividindo o texto
-    segments = re.split(combined_pattern, "\n" + text)
-    titles = re.findall(combined_pattern, "\n" + text)
+    # re.split e re.findall agora usam re.IGNORECASE como argumento externo
+    segments = re.split(combined_pattern, "\n" + text, flags=re.IGNORECASE)
+    titles = re.findall(combined_pattern, "\n" + text, flags=re.IGNORECASE)
     
-    # Fallback caso não encontre divisões claras
+    # Fallback se não detectar estrutura
     if len(segments) < 2:
         chunk_size = 7000 
         return [{"title": f"Parte {i+1:02d}", "content": text[j:j+chunk_size]} 
@@ -89,10 +92,9 @@ def split_by_chapters(text):
     chapters = []
     for i, content in enumerate(segments):
         content_cleaned = clean_text(content)
-        if len(content_cleaned) < 50: continue # Ignora pedaços muito pequenos (ruído)
+        if len(content_cleaned) < 50: continue
         
-        # Título limpo (remove o \n do início)
-        title = titles[i-1].strip() if i > 0 else "Introdução / Início"
+        title = titles[i-1].strip() if i > 0 else "Início do Livro"
         chapters.append({"title": title, "content": content_cleaned})
     
     return chapters
@@ -117,7 +119,6 @@ def generate_audio_with_metadata(text, voice, filename, tags, cover_image=None):
         
         if cover_image:
             img_byte_arr = BytesIO()
-            # Converte para RGB para garantir compatibilidade com MP3 tags
             if cover_image.mode in ("RGBA", "P"):
                 cover_image = cover_image.convert("RGB")
             cover_image.save(img_byte_arr, format='JPEG')
@@ -126,7 +127,7 @@ def generate_audio_with_metadata(text, voice, filename, tags, cover_image=None):
         audio.save()
         return True
     except Exception as e:
-        st.error(f"Erro ao processar áudio: {e}")
+        st.error(f"Erro no áudio: {e}")
         return False
 
 # --- INTERFACE ---
@@ -151,7 +152,7 @@ with col1:
     st.markdown(f"## 🎧 Narrador.AI Pro")
     
     if input_mode == "📂 Arquivo":
-        uploaded_file = st.file_uploader("Upload do livro", type=["pdf", "epub", "txt", "docx"])
+        uploaded_file = st.file_uploader("Upload", type=["pdf", "epub", "txt", "docx"])
         if uploaded_file:
             raw_text = ""
             if uploaded_file.name.endswith(".pdf"):
@@ -167,7 +168,7 @@ with col1:
                     raw_text += soup.get_text() + "\n"
                 os.remove("temp.epub")
             
-            if raw_text and st.button("🔍 Analisar Capítulos"):
+            if raw_text and st.button("🔍 Analisar Estrutura"):
                 st.session_state.chapters = split_by_chapters(raw_text)
                 st.rerun()
 
@@ -177,49 +178,49 @@ with col1:
             st.session_state.chapters = split_by_chapters(manual_text)
 
 with col2:
-    st.markdown("### 📋 Capítulos")
+    st.markdown("### 📋 Conteúdo Detectado")
     if "chapters" in st.session_state:
-        for i, cap in enumerate(st.session_state.chapters[:12]):
+        for i, cap in enumerate(st.session_state.chapters[:15]):
             st.markdown(f"<div class='chapter-card'><b>{i+1}.</b> {cap['title']}</div>", unsafe_allow_html=True)
-        if len(st.session_state.chapters) > 12:
-            st.caption(f"E mais {len(st.session_state.chapters)-12} partes...")
+        if len(st.session_state.chapters) > 15:
+            st.caption(f"E mais {len(st.session_state.chapters)-15} partes...")
 
 # GERAÇÃO
 if "chapters" in st.session_state and st.session_state.chapters:
     st.divider()
     c1, c2, c3 = st.columns(3)
     
-    if c1.button("🚀 GERAR ÁUDIO"):
+    if c1.button("🚀 INICIAR NARRAÇÃO"):
         progress_bar = st.progress(0)
         status = st.empty()
         
         for idx, cap in enumerate(st.session_state.chapters):
             track_num = idx + 1
-            # Limpa nome do arquivo para evitar erros de sistema
-            safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])[:40].strip()
+            # Limpeza radical de caracteres inválidos no nome do arquivo
+            safe_title = "".join([c for c in cap['title'] if c.isalnum() or c in (' ', '_')]).strip()[:30]
             fname = os.path.join(OUTPUT_DIR, f"{track_num:03d}_{safe_title}.mp3")
             
             if not os.path.exists(fname):
-                status.info(f"Processando: {cap['title']}")
+                status.info(f"Narrando: {cap['title']}")
                 tags = {"title": cap['title'], "author": book_author, "track": track_num}
                 generate_audio_with_metadata(cap['content'], VOICES[voice_key], fname, tags, cover_img)
             
             progress_bar.progress(track_num / len(st.session_state.chapters))
         
-        status.success("✅ Concluído!")
+        status.success("✅ Geração Finalizada!")
 
-    if c2.button("📦 BAIXAR TUDO (ZIP)"):
+    if c2.button("📦 BAIXAR ZIP"):
         zip_buffer = io.BytesIO()
         files_to_zip = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")]
         if files_to_zip:
             with zipfile.ZipFile(zip_buffer, "w") as z:
                 for f in files_to_zip:
                     z.write(os.path.join(OUTPUT_DIR, f), f)
-            st.download_button("⬇️ Salvar arquivo .zip", zip_buffer.getvalue(), f"{book_title}.zip")
+            st.download_button("⬇️ Salvar .zip", zip_buffer.getvalue(), f"{book_title}.zip")
         else:
-            st.warning("Gere os áudios primeiro!")
+            st.warning("Nenhum áudio gerado.")
 
-    if c3.button("🗑️ LIMPAR"):
+    if c3.button("🗑️ RESETAR"):
         for f in os.listdir(OUTPUT_DIR):
             os.remove(os.path.join(OUTPUT_DIR, f))
         if "chapters" in st.session_state: del st.session_state.chapters
