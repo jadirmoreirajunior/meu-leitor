@@ -24,10 +24,9 @@ except:
 
 APP_NAME = "Narrador.AI"
 
-# 🔥 LOGO
+# LOGO
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
 
-# favicon (aba do navegador)
 try:
     response = requests.get(ICON_URL)
     icon = Image.open(BytesIO(response.content))
@@ -36,12 +35,12 @@ except:
 
 st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
 
-# 🔥 HEADER COM LOGO
+# HEADER
 st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-        <img src="{ICON_URL}" width="60" style="border-radius:12px;">
-        <h1 style="margin:0;">Narrador.AI</h1>
-    </div>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+    <img src="{ICON_URL}" width="60" style="border-radius:12px;">
+    <h1 style="margin:0;">Narrador.AI</h1>
+</div>
 """, unsafe_allow_html=True)
 
 OUTPUT_DIR = "out"
@@ -145,8 +144,9 @@ def generate_audio(text, voice, filename, tags):
         print(e)
         return False
 
-# UI
-file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
+# ---------------- UI ----------------
+
+input_mode = st.radio("Modo de entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
 
 book_title = st.text_input("Título", "Meu Livro")
 book_author = st.text_input("Autor", "Autor")
@@ -170,25 +170,40 @@ if st.button("▶️ Ouvir Prévia"):
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-# PROCESSAMENTO
 chapters = []
 
-if file:
-    if file.name.endswith(".pdf"):
-        text = extract_text_pdf(file)
-    elif file.name.endswith(".epub"):
-        text = extract_text_epub(file)
-    elif file.name.endswith(".docx"):
-        text = extract_text_docx(file)
-    elif file.name.endswith(".txt"):
-        text = extract_text_txt(file)
-    else:
-        text = ""
+# --------- MODO ARQUIVO ---------
+if input_mode == "Arquivo":
+    file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
-    if text:
-        chapters = split_text(text)
-        st.success(f"{len(chapters)} partes identificadas")
+    if file:
+        if file.name.endswith(".pdf"):
+            text = extract_text_pdf(file)
+        elif file.name.endswith(".epub"):
+            text = extract_text_epub(file)
+        elif file.name.endswith(".docx"):
+            text = extract_text_docx(file)
+        elif file.name.endswith(".txt"):
+            text = extract_text_txt(file)
+        else:
+            text = ""
 
+        if text:
+            chapters = split_text(text)
+            st.success(f"{len(chapters)} partes identificadas")
+
+# --------- MODO TEXTO ---------
+else:
+    manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
+
+    if st.button("📝 Processar Texto"):
+        if manual_text.strip():
+            chapters = split_text(manual_text)
+            st.success(f"{len(chapters)} partes identificadas")
+        else:
+            st.warning("Digite algum texto primeiro.")
+
+# --------- GERAÇÃO ---------
 if chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
