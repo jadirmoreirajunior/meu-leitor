@@ -369,15 +369,15 @@ for f in files:
         st.download_button(f"Baixar {f}", audio, f)
 
 if files:
-if st.button("📦 Gerar ZIP"):
-    with st.spinner("📦 Gerando arquivo ZIP..."):
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as z:
-            for f in files:
-                z.write(os.path.join(OUTPUT_DIR, f), f)
+    if st.button("📦 Gerar ZIP"):
+        with st.spinner("📦 Gerando arquivo ZIP..."):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as z:
+                for f in files:
+                    z.write(os.path.join(OUTPUT_DIR, f), f)
 
-    st.success("✅ ZIP pronto!")
-    st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
+        st.success("✅ ZIP pronto!")
+        st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
 # LIMPAR
 if st.button("🗑️ Limpar Tudo"):
