@@ -9,6 +9,18 @@ from pathlib import Path
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, TIT2, TPE1, TRCK, APIC
 
+# EXTRAÇÃO
+from PyPDF2 import PdfReader
+from ebooklib import epub, ITEM_DOCUMENT
+from bs4 import BeautifulSoup
+
+# DOCX opcional
+try:
+    import docx
+    WORD_SUPPORT = True
+except:
+    WORD_SUPPORT = False
+
 # =========================
 # CONFIG
 # =========================
@@ -32,23 +44,15 @@ VOICES = {
 }
 
 # =========================
-# UI MOBILE STYLE
+# UI
 # =========================
 
 st.set_page_config(page_title=APP_NAME, layout="wide")
 
 st.markdown("""
 <style>
-.block-container {
-    padding-top: 1rem;
-    padding-bottom: 4rem;
-}
-button {
-    width: 100%;
-    border-radius: 12px;
-    height: 50px;
-    font-size: 16px;
-}
+.block-container { padding-top: 1rem; }
+button { width: 100%; border-radius: 10px; height: 45px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,12 +62,8 @@ st.title("🎧 Narrador.AI PRO")
 # UTILS
 # =========================
 
-def hash_book(title, author):
-    return hashlib.md5((title + author).encode()).hexdigest()
-
 def normalize_text(text):
     text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'([.!?])([A-Za-z])', r'\1 \2', text)
     return text.strip()
 
 def split_sentences(text, max_chars=4500):
@@ -85,40 +85,53 @@ def split_sentences(text, max_chars=4500):
     return chunks
 
 def create_parts(text):
-    parts = split_sentences(text)
-    return [
-        {"title": f"Parte {i+1}", "content": p}
-        for i, p in enumerate(parts)
-    ]
+    return [{"title": f"Parte {i+1}", "content": p}
+            for i, p in enumerate(split_sentences(text))]
 
 # =========================
-# CACHE
+# EXTRAÇÃO
 # =========================
 
-def progress_file(book_id):
-    return CACHE_DIR / f"{book_id}.json"
+def extract_pdf(file):
+    reader = PdfReader(file)
+    return "\n".join([p.extract_text() or "" for p in reader.pages])
 
-def load_progress(book_id):
-    f = progress_file(book_id)
-    if f.exists():
-        return json.loads(f.read_text())
-    return {}
+def extract_txt(file):
+    return file.read().decode("utf-8", errors="ignore")
 
-def save_progress(book_id, data):
-    progress_file(book_id).write_text(json.dumps(data))
+def extract_docx(file):
+    if not WORD_SUPPORT:
+        return ""
+    doc = docx.Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
+
+def extract_epub(file):
+    temp = "temp.epub"
+    with open(temp, "wb") as f:
+        f.write(file.read())
+
+    book = epub.read_epub(temp)
+    texts = []
+
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        soup = BeautifulSoup(item.get_content(), "html.parser")
+        text = soup.get_text(separator="\n").strip()
+        if len(text) > 200:
+            texts.append(text)
+
+    os.remove(temp)
+
+    return "\n\n".join(texts)
 
 # =========================
 # SSML
 # =========================
 
 def apply_ssml(text, voice):
-    text = text.replace("\n", " ")
     return f"""
 <speak>
     <voice name="{voice}">
-        <prosody rate="0.95" pitch="+0%">
-            {text}
-        </prosody>
+        <prosody rate="0.95">{text}</prosody>
     </voice>
 </speak>
 """
@@ -132,16 +145,15 @@ async def tts_generate(ssml, voice, output):
     await communicate.save(output)
 
 def generate_audio(text, voice, output):
-    ssml = apply_ssml(text, voice)
-
     try:
+        ssml = apply_ssml(text, voice)
         asyncio.run(tts_generate(ssml, voice, output))
         return True
     except:
         return False
 
 # =========================
-# TAG + CAPA
+# METADATA
 # =========================
 
 def add_metadata(file, title, author, track, cover_bytes=None):
@@ -168,42 +180,53 @@ def add_metadata(file, title, author, track, cover_bytes=None):
     audio.save()
 
 # =========================
-# TABS
+# INPUT
 # =========================
 
-tab1, tab2, tab3 = st.tabs(["📚 Livro", "🎧 Player", "⚙️ Config"])
-
-# =========================
-# TAB LIVRO
-# =========================
+tab1, tab2 = st.tabs(["📚 Entrada", "🎧 Player"])
 
 with tab1:
-    book_title = st.text_input("Título do Livro")
+
+    book_title = st.text_input("Título")
     book_author = st.text_input("Autor")
 
     voice_label = st.selectbox("Voz", list(VOICES.keys()))
     voice = VOICES[voice_label]
 
-    cover = st.file_uploader("Capa do livro", type=["jpg", "png"])
+    cover = st.file_uploader("Capa", type=["jpg", "png"])
 
-    text = st.text_area("Cole seu texto aqui", height=250)
+    mode = st.radio("Entrada", ["Arquivo", "Texto"])
 
-    if st.button("📖 Processar Texto"):
-        if text.strip():
+    text = ""
+
+    if mode == "Arquivo":
+        file = st.file_uploader("Envie arquivo", type=["pdf", "epub", "docx", "txt"])
+
+        if file:
+            if file.name.endswith(".pdf"):
+                text = extract_pdf(file)
+
+            elif file.name.endswith(".epub"):
+                text = extract_epub(file)
+
+            elif file.name.endswith(".docx"):
+                text = extract_docx(file)
+
+            elif file.name.endswith(".txt"):
+                text = extract_txt(file)
+
+    else:
+        text = st.text_area("Texto", height=200)
+
+    if st.button("📖 Processar"):
+        if text:
             clean = normalize_text(text)
             st.session_state.parts = create_parts(clean)
             st.success(f"{len(st.session_state.parts)} partes criadas")
 
-# =========================
-# GERAR
-# =========================
-
     if "parts" in st.session_state:
 
         if st.button("🚀 Gerar Audiobook"):
-
-            book_id = hash_book(book_title, book_author)
-            progress = load_progress(book_id)
 
             progress_bar = st.progress(0)
 
@@ -211,7 +234,7 @@ with tab1:
                 track = i + 1
                 fname = OUTPUT_DIR / f"{track:03d}.mp3"
 
-                if str(track) in progress:
+                if fname.exists():
                     continue
 
                 ok = generate_audio(part["content"], voice, str(fname))
@@ -227,39 +250,20 @@ with tab1:
                         cover_bytes
                     )
 
-                    progress[str(track)] = True
-                    save_progress(book_id, progress)
-
                 progress_bar.progress((i+1)/len(st.session_state.parts))
 
-            st.success("✅ Audiobook gerado!")
+            st.success("✅ Concluído")
 
 # =========================
 # PLAYER
 # =========================
 
 with tab2:
-    st.subheader("🎧 Player")
-
     files = sorted(OUTPUT_DIR.glob("*.mp3"))
 
     if not files:
-        st.info("Nenhum áudio ainda.")
+        st.info("Nenhum áudio gerado")
     else:
         for f in files:
             st.markdown(f"**{f.name}**")
             st.audio(str(f))
-
-# =========================
-# CONFIG
-# =========================
-
-with tab3:
-    st.subheader("⚙️ Configurações")
-
-    if st.button("🗑 Limpar tudo"):
-        for f in OUTPUT_DIR.glob("*"):
-            f.unlink()
-        for f in CACHE_DIR.glob("*"):
-            f.unlink()
-        st.rerun()
