@@ -7,6 +7,7 @@ import io
 import json
 import shutil
 import requests
+import re
 from io import BytesIO
 from PIL import Image
 from PyPDF2 import PdfReader
@@ -110,7 +111,31 @@ def extract_text_epub(file):
 
     return "\n\n".join(texts)
 
-# DIVISÃO
+# 🔥 NOVA FUNÇÃO INTELIGENTE
+def split_by_chapters(text):
+    pattern = r'^\s*(Cap[ií]tulo|Chapter|Parte)\s+([IVXLCDM]+|\d+).*'
+    matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
+
+    if len(matches) >= 3:
+        chapters = []
+        for i in range(len(matches)):
+            start = matches[i].start()
+            end = matches[i+1].start() if i+1 < len(matches) else len(text)
+
+            title = matches[i].group().strip()
+            content = text[start:end].strip()
+
+            chapters.append({
+                "title": title,
+                "content": content
+            })
+
+        return chapters
+
+    # fallback
+    return split_text(text)
+
+# DIVISÃO PADRÃO
 def split_text(text):
     chunks = []
     size = 5000
@@ -151,8 +176,7 @@ def generate_audio(text, voice, filename, tags):
         st.error(str(e))
         return False
 
-# ---------------- UI ----------------
-
+# UI
 input_mode = st.radio("Modo de entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
 
 book_title = st.text_input("Título", "Meu Livro")
@@ -174,8 +198,7 @@ if st.button("▶️ Ouvir Prévia"):
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-# --------- ENTRADA ---------
-
+# ENTRADA
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
@@ -192,7 +215,7 @@ if input_mode == "Arquivo":
             text = ""
 
         if text:
-            st.session_state.chapters = split_text(text)
+            st.session_state.chapters = split_by_chapters(text)
             st.success(f"{len(st.session_state.chapters)} partes identificadas")
 
 else:
@@ -200,25 +223,25 @@ else:
 
     if st.button("📝 Processar Texto"):
         if manual_text.strip():
-            st.session_state.chapters = split_text(manual_text)
+            st.session_state.chapters = split_by_chapters(manual_text)
             st.success(f"{len(st.session_state.chapters)} partes identificadas")
         else:
             st.warning("Digite algum texto primeiro.")
 
-# --------- GERAÇÃO ---------
-
+# GERAÇÃO
 if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
 
         for i, cap in enumerate(st.session_state.chapters):
             track = i + 1
-            fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
+            safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
+            fname = f"{OUTPUT_DIR}/{track:03d} - {safe_title}.mp3"
 
             if os.path.exists(fname):
                 continue
 
-            st.write(f"Gerando parte {track}...")
+            st.write(f"Gerando: {cap['title']}")
 
             tags = {
                 "title": f"{book_title} - {cap['title']}",
@@ -238,8 +261,7 @@ if st.session_state.chapters:
         st.success("Processo concluído ou pausado")
         st.session_state.chapters = []
 
-# --------- DOWNLOAD ---------
-
+# DOWNLOAD
 st.write("## Downloads")
 
 files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
@@ -257,8 +279,7 @@ if files:
 
         st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
-# --------- LIMPAR ---------
-
+# LIMPAR
 if st.button("🗑️ Limpar Tudo"):
     if os.path.exists(OUTPUT_DIR):
         shutil.rmtree(OUTPUT_DIR)
