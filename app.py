@@ -8,6 +8,7 @@ import json
 import shutil
 import requests
 import re
+import time
 from io import BytesIO
 from PIL import Image
 from PyPDF2 import PdfReader
@@ -102,25 +103,21 @@ def extract_text_epub(file):
     try:
         book = epub.read_epub("temp.epub")
 
-        # 🔥 USAR APENAS NÍVEL PRINCIPAL DO TOC
         toc = book.toc
-
         main_items = []
 
         for item in toc:
-            # item pode ser (capítulo, subitens)
             if isinstance(item, tuple):
-                main_items.append(item[0])  # só o principal
+                main_items.append(item[0])
             else:
                 main_items.append(item)
 
-        # 🔥 EXTRAIR SOMENTE CAPÍTULOS PRINCIPAIS
+        # 🔥 tenta usar TOC
         for idx, item in enumerate(main_items):
             try:
                 doc = book.get_item_with_href(item.href)
                 soup = BeautifulSoup(doc.get_content(), "html.parser")
 
-                # remove scripts/imagens
                 for tag in soup(["script", "style", "img", "svg"]):
                     tag.decompose()
 
@@ -133,12 +130,13 @@ def extract_text_epub(file):
                         "title": title,
                         "content": text
                     })
-
             except:
                 continue
 
-        # 🔁 FALLBACK se TOC falhar
-        if len(chapters) < 3:
+        # 🔥 valida TOC (aqui resolve seu problema)
+        total_chars = sum(len(c["content"]) for c in chapters)
+
+        if len(chapters) < 3 or total_chars < 10000:
             texts = []
             for item in book.get_items_of_type(ITEM_DOCUMENT):
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
@@ -154,18 +152,13 @@ def extract_text_epub(file):
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
-            
-# 🔥 NOVA FUNÇÃO INTELIGENTE
-def split_by_chapters(text):
-    import re
 
-    # 🔒 garantir string
+# DETECÇÃO INTELIGENTE
+def split_by_chapters(text):
     if isinstance(text, list):
         text = "\n\n".join(
             [item["content"] if isinstance(item, dict) else str(item) for item in text]
         )
-    if not isinstance(text, str):
-        text = str(text)
 
     lines = text.split("\n")
 
@@ -173,11 +166,11 @@ def split_by_chapters(text):
     titles = []
 
     patterns = [
-        r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',     # Capítulo I, Capítulo 1
-        r'^\s*chapter\s+\d+',                  # Chapter 1
-        r'^\s*parte\s+\d+',                    # Parte 1
-        r'^\s*[ivxlcdm]+$',                    # II, III, IV
-        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'            # TÍTULOS EM CAIXA ALTA
+        r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',
+        r'^\s*chapter\s+\d+',
+        r'^\s*parte\s+\d+',
+        r'^\s*[ivxlcdm]+$',
+        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'
     ]
 
     for i, line in enumerate(lines):
@@ -188,7 +181,6 @@ def split_by_chapters(text):
 
         for pattern in patterns:
             if re.match(pattern, clean, re.IGNORECASE):
-                # evitar duplicados próximos (subtítulos)
                 if chapter_indices and (i - chapter_indices[-1] < 10):
                     continue
 
@@ -196,7 +188,6 @@ def split_by_chapters(text):
                 titles.append(clean)
                 break
 
-    # 🔥 se encontrou capítulos suficientes
     if len(chapter_indices) >= 3:
         chapters = []
 
@@ -205,24 +196,21 @@ def split_by_chapters(text):
             end = chapter_indices[idx+1] if idx+1 < len(chapter_indices) else len(lines)
 
             content = "\n".join(lines[start:end]).strip()
-            title = titles[idx]
 
-            # ignorar capítulos muito pequenos (prováveis erros)
             if len(content) < 500:
                 continue
 
             chapters.append({
-                "title": title,
+                "title": titles[idx],
                 "content": content
             })
 
         if len(chapters) >= 3:
             return chapters
 
-    # 🔁 fallback seguro
     return split_text(text)
-    
-# DIVISÃO PADRÃO
+
+# FALLBACK
 def split_text(text):
     chunks = []
     size = 5000
@@ -286,6 +274,8 @@ if st.button("▶️ Ouvir Prévia"):
     st.audio("preview.mp3")
 
 # ENTRADA
+file = None
+
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
@@ -298,7 +288,7 @@ if file:
     elif file.name.endswith(".epub"):
         result = extract_text_epub(file)
 
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+        if isinstance(result, list) and isinstance(result[0], dict):
             st.session_state.chapters = result
             st.success(f"{len(result)} capítulos identificados")
         else:
@@ -310,11 +300,9 @@ if file:
     elif file.name.endswith(".txt"):
         text = extract_text_txt(file)
 
-    # 🔥 fallback para tudo que virou texto
     if text:
         st.session_state.chapters = split_by_chapters(text)
         st.success(f"{len(st.session_state.chapters)} partes identificadas")
-
 
 else:
     manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
@@ -323,23 +311,19 @@ else:
         if manual_text.strip():
             st.session_state.chapters = split_by_chapters(manual_text)
             st.success(f"{len(st.session_state.chapters)} partes identificadas")
-        else:
-            st.warning("Digite algum texto primeiro.")
 
-
-# --------- VISUALIZAÇÃO DOS CAPÍTULOS ---------
-
+# VISUALIZAÇÃO
 if st.session_state.chapters:
     st.write("## 📚 Capítulos identificados")
-
-    with st.expander("Ver lista de capítulos"):
+    with st.expander("Ver lista"):
         for i, cap in enumerate(st.session_state.chapters):
             st.write(f"{i+1:02d} - {cap['title']}")
-            
+
 # GERAÇÃO
 if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
+        status = st.empty()
 
         for i, cap in enumerate(st.session_state.chapters):
             track = i + 1
@@ -349,7 +333,9 @@ if st.session_state.chapters:
             if os.path.exists(fname):
                 continue
 
-            st.write(f"Gerando: {cap['title']}")
+            for dots in ["", ".", "..", "..."]:
+                status.text(f"Gerando áudio{dots} ({track})")
+                time.sleep(0.2)
 
             tags = {
                 "title": f"{book_title} - {cap['title']}",
@@ -366,7 +352,7 @@ if st.session_state.chapters:
                 st.error(f"Erro na parte {track}")
                 break
 
-        st.success("Processo concluído ou pausado")
+        status.text("Finalizado ✅")
         st.session_state.chapters = []
 
 # DOWNLOAD
@@ -380,11 +366,18 @@ for f in files:
 
 if files:
     if st.button("📦 Gerar ZIP"):
+        status_zip = st.empty()
+
+        for dots in ["", ".", "..", "..."]:
+            status_zip.text(f"Gerando ZIP{dots}")
+            time.sleep(0.3)
+
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as z:
             for f in files:
                 z.write(os.path.join(OUTPUT_DIR, f), f)
 
+        status_zip.text("ZIP pronto ✅")
         st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
 
 # LIMPAR
