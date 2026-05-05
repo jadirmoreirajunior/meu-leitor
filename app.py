@@ -212,7 +212,7 @@ if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
 
-       for i, cap in enumerate(st.session_state.chapters):
+        for i, cap in enumerate(st.session_state.chapters):
             track = i + 1
             fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
 
