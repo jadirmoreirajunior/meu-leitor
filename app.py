@@ -46,6 +46,9 @@ st.markdown(f"""
 OUTPUT_DIR = "out"
 PROGRESS_FILE = "progress.json"
 
+if "chapters" not in st.session_state:
+    st.session_state.chapters = []
+    
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
@@ -170,27 +173,27 @@ if st.button("▶️ Ouvir Prévia"):
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-chapters = []
+chapters = st.session_state.chapters
 
 # --------- MODO ARQUIVO ---------
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
-    if file:
-        if file.name.endswith(".pdf"):
-            text = extract_text_pdf(file)
-        elif file.name.endswith(".epub"):
-            text = extract_text_epub(file)
-        elif file.name.endswith(".docx"):
-            text = extract_text_docx(file)
-        elif file.name.endswith(".txt"):
-            text = extract_text_txt(file)
-        else:
-            text = ""
+if file:
+    if file.name.endswith(".pdf"):
+        text = extract_text_pdf(file)
+    elif file.name.endswith(".epub"):
+        text = extract_text_epub(file)
+    elif file.name.endswith(".docx"):
+        text = extract_text_docx(file)
+    elif file.name.endswith(".txt"):
+        text = extract_text_txt(file)
+    else:
+        text = ""
 
-        if text:
-            chapters = split_text(text)
-            st.success(f"{len(chapters)} partes identificadas")
+    if text:
+        st.session_state.chapters = split_text(text)
+        st.success(f"{len(st.session_state.chapters)} partes identificadas")
 
 # --------- MODO TEXTO ---------
 else:
@@ -198,17 +201,18 @@ else:
 
     if st.button("📝 Processar Texto"):
         if manual_text.strip():
-            chapters = split_text(manual_text)
-            st.success(f"{len(chapters)} partes identificadas")
+            st.session_state.chapters = split_text(manual_text)
+            st.success(f"{len(st.session_state.chapters)} partes identificadas")
         else:
             st.warning("Digite algum texto primeiro.")
 
+
 # --------- GERAÇÃO ---------
-if chapters:
+if st.session_state.chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
 
-        for i, cap in enumerate(chapters):
+       for i, cap in enumerate(st.session_state.chapters):
             track = i + 1
             fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
 
@@ -233,6 +237,7 @@ if chapters:
                 break
 
         st.success("Processo concluído ou pausado")
+        st.session_state.chapters = []
 
 # DOWNLOAD
 st.write("## Downloads")
