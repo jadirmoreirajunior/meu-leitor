@@ -159,39 +159,69 @@ def extract_text_epub(file):
 def split_by_chapters(text):
     import re
 
-    # 🔥 GARANTIA: sempre string
+    # 🔒 garantir string
     if isinstance(text, list):
-        try:
-            text = "\n\n".join(
-                [item["content"] if isinstance(item, dict) else str(item) for item in text]
-            )
-        except:
-            text = str(text)
-
+        text = "\n\n".join(
+            [item["content"] if isinstance(item, dict) else str(item) for item in text]
+        )
     if not isinstance(text, str):
         text = str(text)
 
-    pattern = r'^\s*(Cap[ií]tulo|Chapter|Parte)\s+([IVXLCDM]+|\d+).*'
-    matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
+    lines = text.split("\n")
 
-    if len(matches) >= 3:
+    chapter_indices = []
+    titles = []
+
+    patterns = [
+        r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',     # Capítulo I, Capítulo 1
+        r'^\s*chapter\s+\d+',                  # Chapter 1
+        r'^\s*parte\s+\d+',                    # Parte 1
+        r'^\s*[ivxlcdm]{2,}$',                 # II, III, IV
+        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'           # TÍTULOS EM CAIXA ALTA
+    ]
+
+    for i, line in enumerate(lines):
+        clean = line.strip()
+
+        if len(clean) < 5:
+            continue
+
+        for pattern in patterns:
+            if re.match(pattern, clean, re.IGNORECASE):
+                # evitar duplicados próximos (subtítulos)
+                if chapter_indices and (i - chapter_indices[-1] < 10):
+                    continue
+
+                chapter_indices.append(i)
+                titles.append(clean)
+                break
+
+    # 🔥 se encontrou capítulos suficientes
+    if len(chapter_indices) >= 3:
         chapters = []
-        for i in range(len(matches)):
-            start = matches[i].start()
-            end = matches[i+1].start() if i+1 < len(matches) else len(text)
 
-            title = matches[i].group().strip()
-            content = text[start:end].strip()
+        for idx in range(len(chapter_indices)):
+            start = chapter_indices[idx]
+            end = chapter_indices[idx+1] if idx+1 < len(chapter_indices) else len(lines)
+
+            content = "\n".join(lines[start:end]).strip()
+            title = titles[idx]
+
+            # ignorar capítulos muito pequenos (prováveis erros)
+            if len(content) < 500:
+                continue
 
             chapters.append({
                 "title": title,
                 "content": content
             })
 
-        return chapters
+        if len(chapters) >= 3:
+            return chapters
 
+    # 🔁 fallback seguro
     return split_text(text)
-
+    
 # DIVISÃO PADRÃO
 def split_text(text):
     chunks = []
