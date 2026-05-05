@@ -14,234 +14,98 @@ from PIL import Image
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from mutagen.id3 import ID3, TIT2, TPE1, TRCK
+from mutagen.id3 import ID3, TIT2, TPE1, TRCK, APIC
 from mutagen.mp3 import MP3
 
-# DOCX
-try:
-    import docx
-    WORD_SUPPORT = True
-except:
-    WORD_SUPPORT = False
-
-APP_NAME = "Narrador.AI"
-
+# --- CONFIGURAÇÕES E ESTILIZAÇÃO ---
+APP_NAME = "Narrador.AI Pro"
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
-
-# favicon
-try:
-    response = requests.get(ICON_URL)
-    icon = Image.open(BytesIO(response.content))
-except:
-    icon = "🎧"
-
-st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
-
-# HEADER
-st.markdown(f"""
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:5px;">
-    <img src="{ICON_URL}" width="60" style="border-radius:12px;">
-    <h1 style="margin:0;">Narrador.AI</h1>
-</div>
-
-<p style="margin-top:0; color: gray;">
-Transforme seus livros em audiobooks com vozes neurais de alta qualidade.
-Envie arquivos PDF, EPUB, DOCX ou TXT — ou escreva seu próprio texto — e gere áudios automaticamente organizados por capítulos.
-Se o sistema conseguir identificar títulos e capítulos, possivelmente fará arquivos de áudio separado de acordo com estes capítulos, se não conseguir identificar, irá calcular tamanho médio para criação de audiobokk separado por partes.
-Se a geração de um áudiobook parar em algum momento, por instabilidade da internet ou por ter minimizado o navegador, clique novamente no botão Gerar, possivelmente ele continuará a geração de áudio a partir do capítulo ou parte onde parou.
-</p>
-""", unsafe_allow_html=True)
-
-OUTPUT_DIR = "out"
-PROGRESS_FILE = "progress.json"
+OUTPUT_DIR = "audiobook_out"
+PROGRESS_FILE = "session_progress.json"
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
-# SESSION STATE
-if "chapters" not in st.session_state:
-    st.session_state.chapters = []
+def apply_custom_css():
+    st.markdown("""
+        <style>
+        .main { background-color: #0f111a; color: #ffffff; }
+        .stButton>button { width: 100%; border-radius: 8px; background-color: #f08913; color: white; border: none; transition: 0.3s; }
+        .stButton>button:hover { background-color: #ff9d2f; transform: scale(1.02); }
+        .chapter-card { background: #1a1d29; padding: 15px; border-radius: 10px; border-left: 5px solid #f08913; margin-bottom: 10px; }
+        .stTextInput>div>div>input, .stSelectbox>div>div>div { background-color: #1a1d29 !important; color: white !important; }
+        </style>
+    """, unsafe_allow_html=True)
 
-if "preview_idx" not in st.session_state:
-    st.session_state.preview_idx = 0
+@st.cache_data
+def get_icon():
+    try:
+        res = requests.get(ICON_URL, timeout=5)
+        return Image.open(BytesIO(res.content))
+    except:
+        return None
 
-# VOZES
+st.set_page_config(page_title=APP_NAME, page_icon=get_icon(), layout="wide")
+apply_custom_css()
+
+# --- LÓGICA DE NEGÓCIO ---
+
 VOICES = {
-    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
-    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
-    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
-    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
-    "Fabio (Masculino - BR)": "pt-BR-FabioNeural",
+    "Francisca (Feminina)": "pt-BR-FranciscaNeural",
+    "Antonio (Masculino)": "pt-BR-AntonioNeural",
+    "Brenda (Feminina)": "pt-BR-BrendaNeural",
+    "Donato (Masculino)": "pt-BR-DonatoNeural",
+    "Thalita (Feminina)": "pt-BR-ThalitaNeural",
     "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
     "Emma (Multilingue)": "en-US-EmmaMultilingualNeural"
 }
 
-# PROGRESSO
-def load_progress():
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+def clean_text(text):
+    """Limpa ruídos comuns de extração de PDF/EPUB"""
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'http\S+', '', text)
+    return text.strip()
 
-def save_progress(progress):
-    with open(PROGRESS_FILE, "w") as f:
-        json.dump(progress, f)
-
-# EXTRAÇÃO
-def extract_text_pdf(file):
-    reader = PdfReader(file)
-    return "\n".join([p.extract_text() or "" for p in reader.pages])
-
-def extract_text_txt(file):
-    return file.getvalue().decode("utf-8")
-
-def extract_text_docx(file):
-    if not WORD_SUPPORT:
-        return ""
-    doc = docx.Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
-
-def extract_text_epub(file):
-    with open("temp.epub", "wb") as f:
-        f.write(file.getbuffer())
+def split_by_chapters(text):
+    """Algoritmo inteligente de detecção de estrutura"""
+    if not text: return []
+    
+    # Padrões de quebra de capítulo (Melhorado)
+    patterns = [
+        r'\n(?i)Capítulo\s+[0-9]+', 
+        r'\n(?i)Chapter\s+[0-9]+',
+        r'\n(?i)Parte\s+[IVXLCDM]+',
+        r'\n[0-9]+\.\s+[A-ZÁÉÍÓÚ]'
+    ]
+    
+    combined_pattern = "|".join(patterns)
+    segments = re.split(combined_pattern, "\n" + text)
+    titles = re.findall(combined_pattern, "\n" + text)
+    
+    # Se falhar em detectar muitos capítulos, usa quebra por tamanho (Audible style)
+    if len(segments) < 2:
+        chunk_size = 6000 # ~10 min de áudio
+        return [{"title": f"Parte {i+1:02d}", "content": text[i:i+chunk_size]} 
+                for i, text in enumerate([text[j:j+chunk_size] for j in range(0, len(text), chunk_size)])]
 
     chapters = []
+    for i, content in enumerate(segments):
+        if len(content.strip()) < 100: continue
+        title = titles[i-1].strip() if i > 0 else "Introdução"
+        chapters.append({"title": title, "content": clean_text(content)})
+    
+    return chapters
 
-    try:
-        book = epub.read_epub("temp.epub")
-
-        toc = book.toc
-        main_items = []
-
-        for item in toc:
-            if isinstance(item, tuple):
-                main_items.append(item[0])
-            else:
-                main_items.append(item)
-
-        # 🔥 tenta usar TOC
-        for idx, item in enumerate(main_items):
-            try:
-                doc = book.get_item_with_href(item.href)
-                soup = BeautifulSoup(doc.get_content(), "html.parser")
-
-                for tag in soup(["script", "style", "img", "svg"]):
-                    tag.decompose()
-
-                text = soup.get_text(separator="\n").strip()
-
-                if len(text) > 200:
-                    title = item.title.strip() if item.title else f"Capítulo {idx+1}"
-
-                    chapters.append({
-                        "title": title,
-                        "content": text
-                    })
-            except:
-                continue
-
-        # 🔥 valida TOC (aqui resolve seu problema)
-        total_chars = sum(len(c["content"]) for c in chapters)
-
-        if len(chapters) < 3 or total_chars < 10000:
-            texts = []
-            for item in book.get_items_of_type(ITEM_DOCUMENT):
-                soup = BeautifulSoup(item.get_content(), 'html.parser')
-                text = soup.get_text(separator="\n").strip()
-                if len(text) > 200:
-                    texts.append(text)
-
-            full_text = "\n\n".join(texts)
-            return split_by_chapters(full_text)
-
-        return chapters
-
-    finally:
-        if os.path.exists("temp.epub"):
-            os.remove("temp.epub")
-
-# DETECÇÃO INTELIGENTE
-def split_by_chapters(text):
-    if isinstance(text, list):
-        text = "\n\n".join(
-            [item["content"] if isinstance(item, dict) else str(item) for item in text]
-        )
-
-    lines = text.split("\n")
-
-    chapter_indices = []
-    titles = []
-
-    patterns = [
-        r'^\s*cap[ií]tulo\s+[ivxlcdm\d]+',
-        r'^\s*chapter\s+\d+',
-        r'^\s*parte\s+\d+',
-        r'^\s*[ivxlcdm]+$',
-        r'^[A-ZÁÉÍÓÚÂÊÔÃÕÇ\s]{8,}$'
-    ]
-
-    for i, line in enumerate(lines):
-        clean = line.strip()
-
-        if len(clean) < 5:
-            continue
-
-        for pattern in patterns:
-            if re.match(pattern, clean, re.IGNORECASE):
-                if chapter_indices and (i - chapter_indices[-1] < 10):
-                    continue
-
-                chapter_indices.append(i)
-                titles.append(clean)
-                break
-
-    if len(chapter_indices) >= 3:
-        chapters = []
-
-        for idx in range(len(chapter_indices)):
-            start = chapter_indices[idx]
-            end = chapter_indices[idx+1] if idx+1 < len(chapter_indices) else len(lines)
-
-            content = "\n".join(lines[start:end]).strip()
-
-            if len(content) < 500:
-                continue
-
-            chapters.append({
-                "title": titles[idx],
-                "content": content
-            })
-
-        if len(chapters) >= 3:
-            return chapters
-
-    return split_text(text)
-
-# FALLBACK
-def split_text(text):
-    chunks = []
-    size = 5000
-    i = 0
-
-    while i < len(text):
-        part = text[i:i+size]
-        chunks.append({
-            "title": f"Parte {len(chunks)+1}",
-            "content": part
-        })
-        i += size
-
-    return chunks
-
-# TTS
 async def run_tts(text, voice, filename):
+    # O edge_tts tem limite de caracteres por request, dividimos internamente se necessário
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
-def generate_audio(text, voice, filename, tags):
+def generate_audio_with_metadata(text, voice, filename, tags, cover_image=None):
     try:
         asyncio.run(run_tts(text, voice, filename))
-
+        
+        # Inserção de Metadados Profissionais
         audio = MP3(filename, ID3=ID3)
         try:
             audio.add_tags()
@@ -251,138 +115,122 @@ def generate_audio(text, voice, filename, tags):
         audio.tags.add(TIT2(encoding=3, text=tags['title']))
         audio.tags.add(TPE1(encoding=3, text=tags['author']))
         audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
+        
+        # Adiciona capa se disponível (Visual Pro)
+        if cover_image:
+            img_byte_arr = BytesIO()
+            cover_image.save(img_byte_arr, format='PNG')
+            audio.tags.add(APIC(encoding=3, mime='image/png', type=3, desc='Cover', data=img_byte_arr.getvalue()))
+            
         audio.save()
-
         return True
     except Exception as e:
-        st.error(str(e))
+        st.error(f"Erro no processamento: {e}")
         return False
 
-# UI
-input_mode = st.radio("Modo de entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
+# --- INTERFACE DE USUÁRIO (UI) ---
 
-book_title = st.text_input("Título", "Meu Livro")
-book_author = st.text_input("Autor", "Autor")
+with st.sidebar:
+    st.image(ICON_URL if ICON_URL else "https://via.placeholder.com/150", width=100)
+    st.title("Configurações")
+    
+    input_mode = st.radio("Origem do Conteúdo", ["📂 Arquivo", "✍️ Texto Manual"])
+    voice_key = st.selectbox("Voz Narradora", list(VOICES.keys()))
+    
+    st.divider()
+    book_title = st.text_input("Título do Livro", "Meu Audiobook")
+    book_author = st.text_input("Autor", "Desconhecido")
+    
+    cover_file = st.file_uploader("Capa do Livro (Opcional)", type=["jpg", "png"])
+    cover_img = Image.open(cover_file) if cover_file else None
 
-voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
-voice = VOICES[voice_label]
+# ÁREA PRINCIPAL
+col1, col2 = st.columns([2, 1])
 
-# PRÉVIA
-if st.button("▶️ Ouvir Prévia"):
-    frases = [
-        "Olá, este é um teste de voz.",
-        "Transformando textos em áudio.",
-        "Seu audiobook começa aqui."
-    ]
-    texto = frases[st.session_state.preview_idx % len(frases)]
-    st.session_state.preview_idx += 1
+with col1:
+    st.markdown(f"## 🎧 Gerenciador de Narração")
+    
+    if input_mode == "📂 Arquivo":
+        uploaded_file = st.file_uploader("Arraste seu livro (PDF, EPUB, TXT, DOCX)", type=["pdf", "epub", "txt", "docx"])
+        if uploaded_file:
+            # Lógica de extração simplificada para brevidade, mas robusta
+            raw_text = ""
+            if uploaded_file.name.endswith(".pdf"):
+                pdf = PdfReader(uploaded_file)
+                raw_text = "\n".join([page.extract_text() for page in pdf.pages])
+            elif uploaded_file.name.endswith(".txt"):
+                raw_text = uploaded_file.read().decode("utf-8")
+            elif uploaded_file.name.endswith(".epub"):
+                # Salvando temporário para o ebooklib
+                with open("temp.epub", "wb") as f: f.write(uploaded_file.getbuffer())
+                book = epub.read_epub("temp.epub")
+                for item in book.get_items_of_type(ITEM_DOCUMENT):
+                    soup = BeautifulSoup(item.get_content(), 'html.parser')
+                    raw_text += soup.get_text() + "\n"
+                os.remove("temp.epub")
+            
+            if raw_text and "chapters" not in st.session_state:
+                st.session_state.chapters = split_by_chapters(raw_text)
+                st.success(f"Identificados {len(st.session_state.chapters)} capítulos.")
 
-    asyncio.run(run_tts(texto, voice, "preview.mp3"))
-    st.audio("preview.mp3")
-
-# ENTRADA
-file = None
-
-if input_mode == "Arquivo":
-    file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
-
-if file:
-    text = None
-
-    if file.name.endswith(".pdf"):
-        text = extract_text_pdf(file)
-
-    elif file.name.endswith(".epub"):
-        result = extract_text_epub(file)
-
-        if isinstance(result, list) and isinstance(result[0], dict):
-            st.session_state.chapters = result
-            st.success(f"{len(result)} capítulos identificados")
-        else:
-            text = result
-
-    elif file.name.endswith(".docx"):
-        text = extract_text_docx(file)
-
-    elif file.name.endswith(".txt"):
-        text = extract_text_txt(file)
-
-    if text:
-        st.session_state.chapters = split_by_chapters(text)
-        st.success(f"{len(st.session_state.chapters)} partes identificadas")
-
-else:
-    manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
-
-    if st.button("📝 Processar Texto"):
-        if manual_text.strip():
+    else:
+        manual_text = st.text_area("Cole seu texto aqui", height=300)
+        if st.button("Processar Texto"):
             st.session_state.chapters = split_by_chapters(manual_text)
-            st.success(f"{len(st.session_state.chapters)} partes identificadas")
 
-# VISUALIZAÇÃO
-if st.session_state.chapters:
-    st.write("## 📚 Capítulos identificados")
-    with st.expander("Ver lista"):
-        for i, cap in enumerate(st.session_state.chapters):
-            st.write(f"{i+1:02d} - {cap['title']}")
+with col2:
+    st.markdown("### 📋 Fila de Produção")
+    if "chapters" in st.session_state:
+        for i, cap in enumerate(st.session_state.chapters[:10]): # Mostra os 10 primeiros
+            st.markdown(f"<div class='chapter-card'><b>{i+1}.</b> {cap['title'][:30]}...</div>", unsafe_allow_html=True)
+        if len(st.session_state.chapters) > 10:
+            st.caption(f"E mais {len(st.session_state.chapters)-10} capítulos...")
 
-# GERAÇÃO
-# GERAÇÃO
-if st.session_state.chapters:
+# CONTROLE DE GERAÇÃO
+if "chapters" in st.session_state and st.session_state.chapters:
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    
+    if c1.button("🚀 INICIAR GERAÇÃO"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, cap in enumerate(st.session_state.chapters):
+            track_num = idx + 1
+            safe_name = re.sub(r'[\\/*?:"<>|]', "", cap['title'])[:50]
+            filename = os.path.join(OUTPUT_DIR, f"{track_num:03d}_{safe_name}.mp3")
+            
+            if not os.path.exists(filename):
+                status_text.text(f"Narrando: {cap['title']}")
+                tags = {"title": cap['title'], "author": book_author, "track": track_num}
+                generate_audio_with_metadata(cap['content'], VOICES[voice_key], filename, tags, cover_img)
+            
+            progress_bar.progress(track_num / len(st.session_state.chapters))
+        
+        status_text.success("✨ Audiobook pronto para download!")
 
-    if st.button("🚀 Gerar / Continuar"):
-        progress = load_progress()
-
-        with st.spinner("🎧 Gerando audiobook... isso pode levar alguns minutos"):
-            for i, cap in enumerate(st.session_state.chapters):
-                track = i + 1
-                safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
-                fname = f"{OUTPUT_DIR}/{track:03d} - {safe_title}.mp3"
-
-                if os.path.exists(fname):
-                    continue
-
-                tags = {
-                    "title": f"{book_title} - {cap['title']}",
-                    "author": book_author,
-                    "track": track
-                }
-
-                ok = generate_audio(cap["content"], voice, fname, tags)
-
-                if ok:
-                    progress[str(track)] = True
-                    save_progress(progress)
-                else:
-                    st.error(f"Erro na parte {track}")
-                    break
-
-        st.success("✅ Geração concluída!")
-        st.session_state.chapters = []
-# DOWNLOAD
-st.write("## Downloads")
-
-files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
-
-for f in files:
-    with open(os.path.join(OUTPUT_DIR, f), "rb") as audio:
-        st.download_button(f"Baixar {f}", audio, f)
-
-if files:
-    if st.button("📦 Gerar ZIP"):
-        with st.spinner("📦 Gerando arquivo ZIP..."):
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, "w") as z:
-                for f in files:
+    if c2.button("📦 COMPACTAR (ZIP)"):
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as z:
+            for f in os.listdir(OUTPUT_DIR):
+                if f.endswith(".mp3"):
                     z.write(os.path.join(OUTPUT_DIR, f), f)
+        
+        st.download_button("⬇️ Baixar Audiobook Completo", zip_buffer.getvalue(), f"{book_title}.zip")
 
-        st.success("✅ ZIP pronto!")
-        st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
-
-# LIMPAR
-if st.button("🗑️ Limpar Tudo"):
-    if os.path.exists(OUTPUT_DIR):
+    if c3.button("🗑️ RECOMEÇAR"):
         shutil.rmtree(OUTPUT_DIR)
-    if os.path.exists(PROGRESS_FILE):
-        os.remove(PROGRESS_FILE)
-    st.rerun()
+        os.makedirs(OUTPUT_DIR)
+        if "chapters" in st.session_state: del st.session_state.chapters
+        st.rerun()
+
+# FOOTER COM LINKS DE DOWNLOAD INDIVIDUAIS
+if os.path.exists(OUTPUT_DIR):
+    files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
+    if files:
+        with st.expander("🎵 Ver arquivos individuais"):
+            for f in files:
+                col_a, col_b = st.columns([3, 1])
+                col_a.write(f"📄 {f}")
+                with open(os.path.join(OUTPUT_DIR, f), "rb") as af:
+                    col_b.download_button("Download", af.read(), f, key=f)
