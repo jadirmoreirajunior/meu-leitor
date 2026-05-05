@@ -97,19 +97,59 @@ def extract_text_epub(file):
     with open("temp.epub", "wb") as f:
         f.write(file.getbuffer())
 
-    texts = []
+    chapters = []
+
     try:
         book = epub.read_epub("temp.epub")
-        for item in book.get_items_of_type(ITEM_DOCUMENT):
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            text = soup.get_text(separator="\n").strip()
-            if len(text) > 200:
-                texts.append(text)
+
+        # 🔥 TENTAR USAR O TOC (SUMÁRIO REAL)
+        toc = book.toc
+
+        def flatten_toc(toc_items):
+            result = []
+            for item in toc_items:
+                if isinstance(item, tuple):
+                    result.append(item[0])
+                    result.extend(flatten_toc(item[1]))
+                else:
+                    result.append(item)
+            return result
+
+        toc_items = flatten_toc(toc)
+
+        if toc_items:
+            for idx, item in enumerate(toc_items):
+                try:
+                    doc = book.get_item_with_href(item.href)
+                    soup = BeautifulSoup(doc.get_content(), "html.parser")
+                    text = soup.get_text(separator="\n").strip()
+
+                    if len(text) > 200:
+                        title = item.title if item.title else f"Capítulo {idx+1}"
+                        chapters.append({
+                            "title": title,
+                            "content": text
+                        })
+                except:
+                    continue
+
+        # 🔁 FALLBACK: NÃO TEM TOC VÁLIDO
+        if len(chapters) < 3:
+            texts = []
+            for item in book.get_items_of_type(ITEM_DOCUMENT):
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+                text = soup.get_text(separator="\n").strip()
+                if len(text) > 200:
+                    texts.append(text)
+
+            full_text = "\n\n".join(texts)
+            return split_by_chapters(full_text)
+
+        return chapters
+
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
-
-    return "\n\n".join(texts)
 
 # 🔥 NOVA FUNÇÃO INTELIGENTE
 def split_by_chapters(text):
