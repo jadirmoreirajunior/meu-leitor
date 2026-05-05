@@ -219,17 +219,43 @@ def split_by_chapters(text):
 
 # FALLBACK
 def split_text(text):
+    # 🔥 garantir string
+    if not isinstance(text, str):
+        text = str(text)
+
+    total_len = len(text)
+
+    # 🎯 alvo: cerca de 10 partes
+    target_parts = 10
+
+    # tamanho ideal por parte
+    chunk_size = total_len // target_parts
+
+    # limites mínimos e máximos (evita partes ruins)
+    chunk_size = max(3000, chunk_size)
+    chunk_size = min(15000, chunk_size)
+
     chunks = []
-    size = 5000
     i = 0
 
-    while i < len(text):
-        part = text[i:i+size]
-        chunks.append({
-            "title": f"Parte {len(chunks)+1}",
-            "content": part
-        })
-        i += size
+    while i < total_len:
+        end = i + chunk_size
+
+        # tenta cortar no final de frase
+        if end < total_len:
+            last_dot = text.rfind(".", i, end)
+            if last_dot != -1 and last_dot > i + 1000:
+                end = last_dot + 1
+
+        part = text[i:end].strip()
+
+        if part:
+            chunks.append({
+                "title": f"Parte {len(chunks)+1}",
+                "content": part
+            })
+
+        i = end
 
     return chunks
 
