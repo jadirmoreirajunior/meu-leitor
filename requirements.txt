@@ -4,6 +4,6 @@ PyPDF2
 ebooklib
 beautifulsoup4
 mutagen
-gTTS
-asyncio
+requests
+Pillow
 python-docx
