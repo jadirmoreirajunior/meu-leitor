@@ -255,29 +255,32 @@ if st.button("▶️ Ouvir Prévia"):
 if input_mode == "Arquivo":
     file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
-    if file:
-        if file.name.endswith(".pdf"):
-            text = extract_text_pdf(file)
-elif file.name.endswith(".epub"):
-    result = extract_text_epub(file)
+if file:
+    text = None
 
-    # 🔥 Se já vier como capítulos estruturados
-    if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+    if file.name.endswith(".pdf"):
+        text = extract_text_pdf(file)
+
+    elif file.name.endswith(".epub"):
+        result = extract_text_epub(file)
+
+        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
             st.session_state.chapters = result
             st.success(f"{len(result)} capítulos identificados")
-            text = None
         else:
             text = result
-        elif file.name.endswith(".docx"):
-            text = extract_text_docx(file)
-        elif file.name.endswith(".txt"):
-            text = extract_text_txt(file)
-        else:
-            text = ""
 
-if text:
-    st.session_state.chapters = split_by_chapters(text)
-    st.success(f"{len(st.session_state.chapters)} partes identificadas")
+    elif file.name.endswith(".docx"):
+        text = extract_text_docx(file)
+
+    elif file.name.endswith(".txt"):
+        text = extract_text_txt(file)
+
+    # 🔥 fallback para tudo que virou texto
+    if text:
+        st.session_state.chapters = split_by_chapters(text)
+        st.success(f"{len(st.session_state.chapters)} partes identificadas")
+
 
 else:
     manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
