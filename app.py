@@ -216,6 +216,56 @@ def split_hybrid(text):
 
     return chapters
 
+def audible_clean_and_balance(chapters):
+    blacklist = [
+        "créditos", "creditos", "agradecimentos",
+        "dedicatória", "dedicatoria",
+        "prefácio", "prefacio",
+        "sumário", "sumario",
+        "índice", "indice"
+    ]
+
+    # 🔥 1. REMOVER LIXO
+    filtered = []
+    for c in chapters:
+        title = c["title"].lower()
+
+        if any(word in title for word in blacklist):
+            continue
+
+        if len(c["content"]) < 800:
+            continue
+
+        filtered.append(c)
+
+    if not filtered:
+        return chapters  # fallback
+
+    # 🔥 2. JUNTAR CAPÍTULOS MUITO PEQUENOS
+    balanced = []
+    buffer = None
+
+    for c in filtered:
+        if not buffer:
+            buffer = c
+            continue
+
+        if len(buffer["content"]) < 3000:
+            buffer["content"] += "\n\n" + c["content"]
+        else:
+            balanced.append(buffer)
+            buffer = c
+
+    if buffer:
+        balanced.append(buffer)
+
+    # 🔥 3. GARANTIR QUE NÃO EXPLODIU
+    if len(balanced) > 50:
+        full = "\n\n".join([c["content"] for c in balanced])
+        return split_text(full)
+
+    return balanced
+    
 # EPUB COM SPINE
 def extract_text_epub(file):
     with open("temp.epub", "wb") as f:
@@ -325,14 +375,14 @@ if file:
     if file.name.endswith(".pdf"):
         text = extract_text_pdf(file)
     elif file.name.endswith(".epub"):
-        st.session_state.chapters = extract_text_epub(file)
+        st.session_state.chapters = audible_clean_and_balance(extract_text_epub(file))
     elif file.name.endswith(".docx"):
         text = extract_text_docx(file)
     elif file.name.endswith(".txt"):
         text = extract_text_txt(file)
 
     if text:
-        st.session_state.chapters = split_hybrid(text)
+        st.session_state.chapters = audible_clean_and_balance(split_hybrid(text))
 
 else:
     manual_text = st.text_area("Digite o texto")
