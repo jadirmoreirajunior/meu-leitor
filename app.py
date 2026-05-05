@@ -138,7 +138,7 @@ def extract_text_epub(file):
                 continue
 
         # 🔁 FALLBACK se TOC falhar
-        if len(chapters) < 3:
+        if len(chapters) < 5:
             texts = []
             for item in book.get_items_of_type(ITEM_DOCUMENT):
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
