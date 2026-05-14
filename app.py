@@ -7,7 +7,6 @@ import io
 import json
 import shutil
 import requests
-import re
 from io import BytesIO
 from PIL import Image
 from PyPDF2 import PdfReader
@@ -25,9 +24,10 @@ except:
 
 APP_NAME = "Narrador.AI"
 
+# 🔥 LOGO
 ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
 
-# favicon
+# favicon (aba do navegador)
 try:
     response = requests.get(ICON_URL)
     icon = Image.open(BytesIO(response.content))
@@ -36,12 +36,12 @@ except:
 
 st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
 
-# HEADER
+# 🔥 HEADER COM LOGO
 st.markdown(f"""
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-    <img src="{ICON_URL}" width="60" style="border-radius:12px;">
-    <h1 style="margin:0;">Narrador.AI</h1>
-</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <img src="{ICON_URL}" width="60" style="border-radius:12px;">
+        <h1 style="margin:0;">Narrador.AI</h1>
+    </div>
 """, unsafe_allow_html=True)
 
 OUTPUT_DIR = "out"
@@ -49,13 +49,6 @@ PROGRESS_FILE = "progress.json"
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
-
-# SESSION STATE
-if "chapters" not in st.session_state:
-    st.session_state.chapters = []
-
-if "preview_idx" not in st.session_state:
-    st.session_state.preview_idx = 0
 
 # VOZES
 VOICES = {
@@ -98,97 +91,20 @@ def extract_text_epub(file):
         f.write(file.getbuffer())
 
     chapters = []
-
     try:
         book = epub.read_epub("temp.epub")
-
-        # 🔥 TENTAR USAR O TOC (SUMÁRIO REAL)
-        toc = book.toc
-
-        def flatten_toc(toc_items):
-            result = []
-            for item in toc_items:
-                if isinstance(item, tuple):
-                    result.append(item[0])
-                    result.extend(flatten_toc(item[1]))
-                else:
-                    result.append(item)
-            return result
-
-        toc_items = flatten_toc(toc)
-
-        if toc_items:
-            for idx, item in enumerate(toc_items):
-                try:
-                    doc = book.get_item_with_href(item.href)
-                    soup = BeautifulSoup(doc.get_content(), "html.parser")
-                    text = soup.get_text(separator="\n").strip()
-
-                    if len(text) > 200:
-                        title = item.title if item.title else f"Capítulo {idx+1}"
-                        chapters.append({
-                            "title": title,
-                            "content": text
-                        })
-                except:
-                    continue
-
-        # 🔁 FALLBACK: NÃO TEM TOC VÁLIDO
-        if len(chapters) < 3:
-            texts = []
-            for item in book.get_items_of_type(ITEM_DOCUMENT):
-                soup = BeautifulSoup(item.get_content(), 'html.parser')
-                text = soup.get_text(separator="\n").strip()
-                if len(text) > 200:
-                    texts.append(text)
-
-            full_text = "\n\n".join(texts)
-            return split_by_chapters(full_text)
-
-        return chapters
-
+        for item in book.get_items_of_type(ITEM_DOCUMENT):
+            soup = BeautifulSoup(item.get_content(), 'html.parser')
+            text = soup.get_text(separator="\n").strip()
+            if len(text) > 300:
+                chapters.append(text)
     finally:
         if os.path.exists("temp.epub"):
             os.remove("temp.epub")
 
-# 🔥 NOVA FUNÇÃO INTELIGENTE
-def split_by_chapters(text):
-    import re
+    return "\n\n".join(chapters)
 
-    # 🔥 GARANTIA: sempre string
-    if isinstance(text, list):
-        try:
-            text = "\n\n".join(
-                [item["content"] if isinstance(item, dict) else str(item) for item in text]
-            )
-        except:
-            text = str(text)
-
-    if not isinstance(text, str):
-        text = str(text)
-
-    pattern = r'^\s*(Cap[ií]tulo|Chapter|Parte)\s+([IVXLCDM]+|\d+).*'
-    matches = list(re.finditer(pattern, text, flags=re.MULTILINE | re.IGNORECASE))
-
-    if len(matches) >= 3:
-        chapters = []
-        for i in range(len(matches)):
-            start = matches[i].start()
-            end = matches[i+1].start() if i+1 < len(matches) else len(text)
-
-            title = matches[i].group().strip()
-            content = text[start:end].strip()
-
-            chapters.append({
-                "title": title,
-                "content": content
-            })
-
-        return chapters
-
-    return split_text(text)
-
-# DIVISÃO PADRÃO
+# DIVISÃO
 def split_text(text):
     chunks = []
     size = 5000
@@ -226,11 +142,11 @@ def generate_audio(text, voice, filename, tags):
 
         return True
     except Exception as e:
-        st.error(str(e))
+        print(e)
         return False
 
 # UI
-input_mode = st.radio("Modo de entrada:", ["Arquivo", "Texto Manual"], horizontal=True)
+file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
 
 book_title = st.text_input("Título", "Meu Livro")
 book_author = st.text_input("Autor", "Autor")
@@ -239,6 +155,9 @@ voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
 voice = VOICES[voice_label]
 
 # PRÉVIA
+if "preview_idx" not in st.session_state:
+    st.session_state.preview_idx = 0
+
 if st.button("▶️ Ouvir Prévia"):
     frases = [
         "Olá, este é um teste de voz.",
@@ -251,71 +170,37 @@ if st.button("▶️ Ouvir Prévia"):
     asyncio.run(run_tts(texto, voice, "preview.mp3"))
     st.audio("preview.mp3")
 
-# ENTRADA
-if input_mode == "Arquivo":
-    file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
+# PROCESSAMENTO
+chapters = []
 
 if file:
-    text = None
-
     if file.name.endswith(".pdf"):
         text = extract_text_pdf(file)
-
     elif file.name.endswith(".epub"):
-        result = extract_text_epub(file)
-
-        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-            st.session_state.chapters = result
-            st.success(f"{len(result)} capítulos identificados")
-        else:
-            text = result
-
+        text = extract_text_epub(file)
     elif file.name.endswith(".docx"):
         text = extract_text_docx(file)
-
     elif file.name.endswith(".txt"):
         text = extract_text_txt(file)
+    else:
+        text = ""
 
-    # 🔥 fallback para tudo que virou texto
     if text:
-        st.session_state.chapters = split_by_chapters(text)
-        st.success(f"{len(st.session_state.chapters)} partes identificadas")
+        chapters = split_text(text)
+        st.success(f"{len(chapters)} partes identificadas")
 
-
-else:
-    manual_text = st.text_area("Digite ou cole seu texto aqui:", height=250)
-
-    if st.button("📝 Processar Texto"):
-        if manual_text.strip():
-            st.session_state.chapters = split_by_chapters(manual_text)
-            st.success(f"{len(st.session_state.chapters)} partes identificadas")
-        else:
-            st.warning("Digite algum texto primeiro.")
-
-
-# --------- VISUALIZAÇÃO DOS CAPÍTULOS ---------
-
-if st.session_state.chapters:
-    st.write("## 📚 Capítulos identificados")
-
-    with st.expander("Ver lista de capítulos"):
-        for i, cap in enumerate(st.session_state.chapters):
-            st.write(f"{i+1:02d} - {cap['title']}")
-            
-# GERAÇÃO
-if st.session_state.chapters:
+if chapters:
     if st.button("🚀 Gerar / Continuar"):
         progress = load_progress()
 
-        for i, cap in enumerate(st.session_state.chapters):
+        for i, cap in enumerate(chapters):
             track = i + 1
-            safe_title = re.sub(r'[\\/*?:"<>|]', "", cap['title'])
-            fname = f"{OUTPUT_DIR}/{track:03d} - {safe_title}.mp3"
+            fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
 
             if os.path.exists(fname):
                 continue
 
-            st.write(f"Gerando: {cap['title']}")
+            st.write(f"Gerando parte {track}...")
 
             tags = {
                 "title": f"{book_title} - {cap['title']}",
@@ -333,7 +218,6 @@ if st.session_state.chapters:
                 break
 
         st.success("Processo concluído ou pausado")
-        st.session_state.chapters = []
 
 # DOWNLOAD
 st.write("## Downloads")
