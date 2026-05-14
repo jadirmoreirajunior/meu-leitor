@@ -1,7 +1,7 @@
 streamlit
 edge-tts
 mutagen
-PyPDF2
+pdfplumber
 EbookLib
 beautifulsoup4
 Pillow
