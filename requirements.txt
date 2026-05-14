@@ -4,6 +4,5 @@ PyPDF2
 ebooklib
 beautifulsoup4
 mutagen
-requests
-Pillow
 python-docx
+lxml
