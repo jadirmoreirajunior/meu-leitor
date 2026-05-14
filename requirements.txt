@@ -1,9 +1,8 @@
 streamlit
 edge-tts
-PyPDF2
-ebooklib
-beautifulsoup4
 mutagen
-python-docx
-lxml
+PyPDF2
+EbookLib
+beautifulsoup4
 Pillow
+requests
