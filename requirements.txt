@@ -6,3 +6,4 @@ beautifulsoup4
 mutagen
 python-docx
 lxml
+Pillow
