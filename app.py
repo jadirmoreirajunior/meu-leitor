@@ -1,246 +1,404 @@
 import streamlit as st
-import asyncio
 import edge_tts
+import asyncio
+import tempfile
 import os
 import zipfile
-import io
-import json
 import shutil
-import requests
+import re
+import time
+import json
+
+from pathlib import Path
 from io import BytesIO
-from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+
 from PyPDF2 import PdfReader
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from mutagen.id3 import ID3, TIT2, TPE1, TRCK
+
 from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, TIT2, TPE1, TRCK
 
 # DOCX
 try:
     import docx
-    WORD_SUPPORT = True
+    DOCX_SUPPORT = True
 except:
-    WORD_SUPPORT = False
+    DOCX_SUPPORT = False
+
+# =========================
+# CONFIG
+# =========================
 
 APP_NAME = "Narrador.AI"
 
-# 🔥 LOGO
-ICON_URL = "https://raw.githubusercontent.com/jadirmoreirajunior/meu-leitor/main/narrador.ai.png"
+OUTPUT_DIR = Path("output")
+TEMP_DIR = Path("temp")
 
-# favicon (aba do navegador)
-try:
-    response = requests.get(ICON_URL)
-    icon = Image.open(BytesIO(response.content))
-except:
-    icon = "🎧"
+OUTPUT_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True)
 
-st.set_page_config(page_title=APP_NAME, page_icon=icon, layout="wide")
+MAX_CHUNK_SIZE = 1800
+MAX_RETRIES = 5
 
-# 🔥 HEADER COM LOGO
-st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-        <img src="{ICON_URL}" width="60" style="border-radius:12px;">
-        <h1 style="margin:0;">Narrador.AI</h1>
-    </div>
-""", unsafe_allow_html=True)
+# =========================
+# STREAMLIT
+# =========================
 
-OUTPUT_DIR = "out"
-PROGRESS_FILE = "progress.json"
+st.set_page_config(
+    page_title=APP_NAME,
+    page_icon="🎧",
+    layout="wide"
+)
 
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
+st.title("🎧 Narrador.AI")
+st.caption("Criação profissional de audiobooks")
 
-# VOZES
+# =========================
+# VOICES
+# =========================
+
 VOICES = {
-    "Francisca (Feminina - BR)": "pt-BR-FranciscaNeural",
-    "Antonio (Masculino - BR)": "pt-BR-AntonioNeural",
-    "Brenda (Feminina - BR)": "pt-BR-BrendaNeural",
-    "Donato (Masculino - BR)": "pt-BR-DonatoNeural",
-    "Fabio (Masculino - BR)": "pt-BR-FabioNeural",
-    "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
-    "Emma (Multilingue)": "en-US-EmmaMultilingualNeural"
+    "Francisca (BR)": "pt-BR-FranciscaNeural",
+    "Antonio (BR)": "pt-BR-AntonioNeural",
+    "Brenda (BR)": "pt-BR-BrendaNeural",
+    "Donato (BR)": "pt-BR-DonatoNeural",
+    "Fabio (BR)": "pt-BR-FabioNeural",
+    "Emma (EN)": "en-US-EmmaMultilingualNeural",
+    "Andrew (EN)": "en-US-AndrewMultilingualNeural",
 }
 
-# PROGRESSO
-def load_progress():
-    if os.path.exists(PROGRESS_FILE):
-        with open(PROGRESS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+# =========================
+# TEXT CLEANER
+# =========================
 
-def save_progress(progress):
-    with open(PROGRESS_FILE, "w") as f:
-        json.dump(progress, f)
+def clean_text(text):
 
-# EXTRAÇÃO
-def extract_text_pdf(file):
-    reader = PdfReader(file)
-    return "\n".join([p.extract_text() or "" for p in reader.pages])
+    text = text.replace("\x00", " ")
 
-def extract_text_txt(file):
-    return file.getvalue().decode("utf-8")
+    text = re.sub(r"\s+", " ", text)
 
-def extract_text_docx(file):
-    if not WORD_SUPPORT:
-        return ""
-    doc = docx.Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
+    text = re.sub(r"([a-z])-\s+([a-z])", r"\1\2", text)
 
-def extract_text_epub(file):
-    with open("temp.epub", "wb") as f:
-        f.write(file.getbuffer())
+    text = text.strip()
 
-    chapters = []
-    try:
-        book = epub.read_epub("temp.epub")
-        for item in book.get_items_of_type(ITEM_DOCUMENT):
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            text = soup.get_text(separator="\n").strip()
-            if len(text) > 300:
-                chapters.append(text)
-    finally:
-        if os.path.exists("temp.epub"):
-            os.remove("temp.epub")
+    return text
 
-    return "\n\n".join(chapters)
+# =========================
+# SMART SPLITTER
+# =========================
 
-# DIVISÃO
-def split_text(text):
+def split_text_smart(text, max_size=MAX_CHUNK_SIZE):
+
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+
     chunks = []
-    size = 5000
-    i = 0
+    current = ""
 
-    while i < len(text):
-        part = text[i:i+size]
-        chunks.append({
-            "title": f"Parte {len(chunks)+1}",
-            "content": part
-        })
-        i += size
+    for sentence in sentences:
+
+        if len(current) + len(sentence) < max_size:
+            current += " " + sentence
+        else:
+            chunks.append(current.strip())
+            current = sentence
+
+    if current:
+        chunks.append(current.strip())
 
     return chunks
 
-# TTS
-async def run_tts(text, voice, filename):
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(filename)
+# =========================
+# EXTRACTORS
+# =========================
 
-def generate_audio(text, voice, filename, tags):
+def extract_pdf(file):
+
+    reader = PdfReader(file)
+
+    pages = []
+
+    for page in reader.pages:
+        txt = page.extract_text()
+        if txt:
+            pages.append(txt)
+
+    return clean_text("\n".join(pages))
+
+def extract_txt(file):
+
     try:
-        asyncio.run(run_tts(text, voice, filename))
+        return clean_text(file.read().decode("utf-8"))
+    except:
+        return clean_text(file.read().decode("latin-1"))
 
-        audio = MP3(filename, ID3=ID3)
+def extract_docx(file):
+
+    if not DOCX_SUPPORT:
+        return ""
+
+    document = docx.Document(file)
+
+    text = "\n".join([p.text for p in document.paragraphs])
+
+    return clean_text(text)
+
+def extract_epub(uploaded_file):
+
+    temp_path = TEMP_DIR / "temp.epub"
+
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+    book = epub.read_epub(str(temp_path))
+
+    texts = []
+
+    for item in book.get_items():
+
+        if item.get_type() == ITEM_DOCUMENT:
+
+            soup = BeautifulSoup(item.get_content(), "html.parser")
+
+            text = soup.get_text(separator=" ")
+
+            texts.append(text)
+
+    return clean_text("\n".join(texts))
+
+# =========================
+# AUDIO VALIDATION
+# =========================
+
+def validate_audio(file_path):
+
+    if not os.path.exists(file_path):
+        return False
+
+    if os.path.getsize(file_path) < 5000:
+        return False
+
+    try:
+        audio = MP3(file_path)
+
+        if audio.info.length <= 0:
+            return False
+
+    except:
+        return False
+
+    return True
+
+# =========================
+# TTS ENGINE
+# =========================
+
+async def tts_generate(text, voice, output_file):
+
+    communicate = edge_tts.Communicate(
+        text=text,
+        voice=voice
+    )
+
+    await communicate.save(output_file)
+
+def generate_audio(text, voice, output_path):
+
+    for attempt in range(MAX_RETRIES):
+
+        try:
+
+            temp_file = str(output_path) + ".tmp.mp3"
+
+            asyncio.run(
+                tts_generate(
+                    text,
+                    voice,
+                    temp_file
+                )
+            )
+
+            if validate_audio(temp_file):
+
+                os.replace(temp_file, output_path)
+
+                return True
+
+            else:
+
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+
+        except Exception as e:
+
+            print(e)
+
+        time.sleep(2)
+
+    return False
+
+# =========================
+# ID3 TAGS
+# =========================
+
+def add_tags(file_path, title, author, track):
+
+    try:
+
+        audio = MP3(file_path, ID3=ID3)
+
         try:
             audio.add_tags()
         except:
             pass
 
-        audio.tags.add(TIT2(encoding=3, text=tags['title']))
-        audio.tags.add(TPE1(encoding=3, text=tags['author']))
-        audio.tags.add(TRCK(encoding=3, text=str(tags['track'])))
+        audio.tags.add(TIT2(encoding=3, text=title))
+        audio.tags.add(TPE1(encoding=3, text=author))
+        audio.tags.add(TRCK(encoding=3, text=str(track)))
+
         audio.save()
 
-        return True
     except Exception as e:
         print(e)
-        return False
 
+# =========================
 # UI
-file = st.file_uploader("Envie seu arquivo", type=["pdf", "epub", "docx", "txt"])
+# =========================
 
-book_title = st.text_input("Título", "Meu Livro")
-book_author = st.text_input("Autor", "Autor")
+uploaded = st.file_uploader(
+    "Envie um arquivo",
+    type=["pdf", "epub", "txt", "docx"]
+)
 
-voice_label = st.selectbox("Escolha a voz", list(VOICES.keys()))
-voice = VOICES[voice_label]
+book_title = st.text_input(
+    "Título",
+    value="Meu Audiobook"
+)
 
-# PRÉVIA
-if "preview_idx" not in st.session_state:
-    st.session_state.preview_idx = 0
+book_author = st.text_input(
+    "Autor",
+    value="Autor"
+)
 
-if st.button("▶️ Ouvir Prévia"):
-    frases = [
-        "Olá, este é um teste de voz.",
-        "Transformando textos em áudio.",
-        "Seu audiobook começa aqui."
-    ]
-    texto = frases[st.session_state.preview_idx % len(frases)]
-    st.session_state.preview_idx += 1
+voice_name = st.selectbox(
+    "Escolha a voz",
+    list(VOICES.keys())
+)
 
-    asyncio.run(run_tts(texto, voice, "preview.mp3"))
-    st.audio("preview.mp3")
+voice = VOICES[voice_name]
 
+# =========================
+# EXTRAÇÃO
+# =========================
+
+full_text = ""
+
+if uploaded:
+
+    with st.spinner("Extraindo texto..."):
+
+        if uploaded.name.endswith(".pdf"):
+            full_text = extract_pdf(uploaded)
+
+        elif uploaded.name.endswith(".epub"):
+            full_text = extract_epub(uploaded)
+
+        elif uploaded.name.endswith(".txt"):
+            full_text = extract_txt(uploaded)
+
+        elif uploaded.name.endswith(".docx"):
+            full_text = extract_docx(uploaded)
+
+    st.success("Texto extraído com sucesso")
+
+# =========================
 # PROCESSAMENTO
-chapters = []
+# =========================
 
-if file:
-    if file.name.endswith(".pdf"):
-        text = extract_text_pdf(file)
-    elif file.name.endswith(".epub"):
-        text = extract_text_epub(file)
-    elif file.name.endswith(".docx"):
-        text = extract_text_docx(file)
-    elif file.name.endswith(".txt"):
-        text = extract_text_txt(file)
-    else:
-        text = ""
+if full_text:
 
-    if text:
-        chapters = split_text(text)
-        st.success(f"{len(chapters)} partes identificadas")
+    chunks = split_text_smart(full_text)
 
-if chapters:
-    if st.button("🚀 Gerar / Continuar"):
-        progress = load_progress()
+    st.info(f"{len(chunks)} partes identificadas")
 
-        for i, cap in enumerate(chapters):
-            track = i + 1
-            fname = f"{OUTPUT_DIR}/{track:03d}.mp3"
+    if st.button("🚀 Gerar Audiobook"):
 
-            if os.path.exists(fname):
+        progress = st.progress(0)
+
+        status = st.empty()
+
+        generated_files = []
+
+        for idx, chunk in enumerate(chunks):
+
+            track = idx + 1
+
+            filename = OUTPUT_DIR / f"{track:03d}.mp3"
+
+            if filename.exists() and validate_audio(filename):
+
+                generated_files.append(filename)
+
                 continue
 
-            st.write(f"Gerando parte {track}...")
+            status.write(f"Gerando parte {track}/{len(chunks)}")
 
-            tags = {
-                "title": f"{book_title} - {cap['title']}",
-                "author": book_author,
-                "track": track
-            }
-
-            ok = generate_audio(cap["content"], voice, fname, tags)
+            ok = generate_audio(
+                chunk,
+                voice,
+                str(filename)
+            )
 
             if ok:
-                progress[str(track)] = True
-                save_progress(progress)
+
+                add_tags(
+                    str(filename),
+                    f"{book_title} - Parte {track}",
+                    book_author,
+                    track
+                )
+
+                generated_files.append(filename)
+
             else:
-                st.error(f"Erro na parte {track}")
+
+                st.error(f"Erro ao gerar parte {track}")
+
                 break
 
-        st.success("Processo concluído ou pausado")
+            progress.progress((idx + 1) / len(chunks))
 
-# DOWNLOAD
-st.write("## Downloads")
+        if generated_files:
 
-files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.endswith(".mp3")])
+            zip_buffer = BytesIO()
 
-for f in files:
-    with open(os.path.join(OUTPUT_DIR, f), "rb") as audio:
-        st.download_button(f"Baixar {f}", audio, f)
+            with zipfile.ZipFile(
+                zip_buffer,
+                "w",
+                zipfile.ZIP_DEFLATED
+            ) as zipf:
 
-if files:
-    if st.button("📦 Gerar ZIP"):
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as z:
-            for f in files:
-                z.write(os.path.join(OUTPUT_DIR, f), f)
+                for file in generated_files:
+                    zipf.write(file, file.name)
 
-        st.download_button("Baixar ZIP", buffer.getvalue(), "audiobook.zip")
+            st.success("Audiobook gerado com sucesso")
 
-# LIMPAR
-if st.button("🗑️ Limpar Tudo"):
-    if os.path.exists(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
-    if os.path.exists(PROGRESS_FILE):
-        os.remove(PROGRESS_FILE)
-    st.rerun()
+            st.download_button(
+                "📦 Baixar Audiobook ZIP",
+                zip_buffer.getvalue(),
+                file_name=f"{book_title}.zip",
+                mime="application/zip"
+            )
+
+# =========================
+# CLEAN
+# =========================
+
+if st.button("🗑️ Limpar Arquivos"):
+
+    shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    st.success("Arquivos removidos")
