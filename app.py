@@ -255,6 +255,8 @@ TEMP_DIR = Path(tempfile.mkdtemp())
 # Vozes disponíveis (validadas e testadas)
 AVAILABLE_VOICES = {
     "🇧🇷 Português Brasileiro": {
+        "Andrew (Multilingue)": "en-US-AndrewMultilingualNeural",
+        "Emma (Multilingue)": "en-US-EmmaMultilingualNeural",
         "Antonio - Voz Masculina Profissional": "pt-BR-AntonioNeural",
         "Francisca - Voz Feminina Natural": "pt-BR-FranciscaNeural",
         "Brenda - Voz Feminina Jovem": "pt-BR-BrendaNeural",
