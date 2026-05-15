@@ -5,582 +5,314 @@ import os
 import zipfile
 import io
 import tempfile
-import shutil
 import re
 import unicodedata
 from pathlib import Path
 from datetime import datetime
-from collections import Counter
 import pdfplumber
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 import time
 
-# ============================================
-# CONFIGURAÇÃO INICIAL
-# ============================================
-
-st.set_page_config(
-    page_title="AudioBook AI - Transforme Texto em Voz",
-    page_icon="🎧",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ============================================
-# CSS MINIMAL (MAIS LEVE E SEGURO)
-# ============================================
+st.set_page_config(page_title="AudioBook AI", page_icon="🎧", layout="wide")
 
 st.markdown("""
 <style>
-    .app-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        margin-bottom: 2rem;
-    }
-    .app-header h1 {
-        color: white;
-        font-size: 2rem;
-        font-weight: 700;
-        margin: 0;
-    }
-    .app-header p {
-        color: rgba(255,255,255,0.9);
-        font-size: 1.1rem;
-        margin-top: 0.5rem;
-    }
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 0.7rem 1.5rem;
-        border-radius: 10px;
-        font-weight: 600;
-        width: 100%;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-    }
-    .success-box {
-        background: #d4edda;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-    }
-    .info-box {
-        background: #e8eaf6;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #c5cae9;
-    }
+.stButton > button {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 0.7rem 1.5rem;
+    border-radius: 10px;
+    font-weight: 600;
+    width: 100%;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================
-# DIRETÓRIO TEMPORÁRIO
-# ============================================
-
 TEMP_DIR = Path(tempfile.mkdtemp())
 
-# ============================================
-# VOZES
-# ============================================
-
-AVAILABLE_VOICES = {
-    "🇧🇷 Português Brasileiro": {
-        "Antonio - Voz Masculina Profissional": "pt-BR-AntonioNeural",
-        "Francisca - Voz Feminina Natural": "pt-BR-FranciscaNeural",
-        "Brenda - Voz Feminina Jovem": "pt-BR-BrendaNeural",
-        "Donato - Voz Masculina Madura": "pt-BR-DonatoNeural",
-        "Thalita - Voz Feminina Suave": "pt-BR-ThalitaNeural"
-    },
-    "🌍 Vozes Multilíngue": {
-        "Alessio - Italiano (Multilíngue)": "it-IT-AlessioMultilingualNeural",
-        "Andrew - Inglês Americano (Multilíngue)": "en-US-AndrewMultilingualNeural",
-        "Emma - Inglês Americano (Multilíngue)": "en-US-EmmaMultilingualNeural",
-        "Ava - Inglês Americano (Multilíngue)": "en-US-AvaMultilingualNeural"
-    },
-    "🇺🇸 Inglês": {
-        "Jenny - Voz Feminina Americana": "en-US-JennyNeural",
-        "Guy - Voz Masculina Americana": "en-US-GuyNeural"
-    }
+VOICES = {
+    "Antonio (Português)": "pt-BR-AntonioNeural",
+    "Francisca (Português)": "pt-BR-FranciscaNeural",
+    "Alessio (Italiano Multilíngue)": "it-IT-AlessioMultilingualNeural",
+    "Andrew (Inglês Multilíngue)": "en-US-AndrewMultilingualNeural",
+    "Emma (Inglês Multilíngue)": "en-US-EmmaMultilingualNeural",
 }
 
-# ============================================
-# CORREÇÕES TEXTUAIS
-# ============================================
-
-def fix_hyphenation(text):
-    """Corrige palavras hifenizadas: cava-\nlo -> cavalo"""
-    # Corrige hífen + quebra de linha
+def clean_text(text):
+    """Limpeza básica de texto"""
+    # Corrige hifenização
     text = re.sub(r'(\w+)-\n(\w+)', r'\1\2', text)
-    # Corrige hífen + espaço
     text = re.sub(r'(\w+)-\s+(\w+)', r'\1\2', text)
+    # Remove caracteres estranhos
+    text = re.sub(r'[^\w\sáéíóúâêôãõçàèìòùäëïöüñÁÉÍÓÚÂÊÔÃÕÇÀÈÌÒÙÄËÏÖÜÑ.,!?;:()\-\'\"\n]', ' ', text, flags=re.UNICODE)
+    text = ' '.join(text.split())
     return text
 
-def fix_common_mistakes(text):
-    """Corrige palavras grudadas comuns"""
-    fixes = {
-        'cavalodado': 'cavalo dado',
-        'burrode carga': 'burro de carga',
-        'péde cabra': 'pé de cabra',
-        'guardachuva': 'guarda chuva',
-        'girassol': 'gira sol',
-        'passatempo': 'passa tempo',
-    }
-    for wrong, correct in fixes.items():
-        text = text.replace(wrong, correct)
-    return text
-
-def remove_headers_footers(pages_text):
-    """
-    Remove cabeçalhos/rodapés que aparecem em múltiplas páginas
-    Versão segura sem st.write() dentro de cached function
-    """
-    if not pages_text or len(pages_text) < 3:
-        return '\n\n'.join(pages_text) if pages_text else ""
+def remove_headers_footers(pages):
+    """Remove cabeçalhos/rodapés repetidos"""
+    if len(pages) < 3:
+        return '\n\n'.join(pages)
     
-    # Coleta todas as linhas
+    # Conta linhas repetidas
     all_lines = []
-    for page in pages_text:
-        lines = [line.strip() for line in page.split('\n') if line.strip()]
-        all_lines.extend(lines)
+    for page in pages:
+        for line in page.split('\n'):
+            line = line.strip()
+            if line:
+                all_lines.append(line)
     
-    # Conta frequência
-    line_counts = Counter(all_lines)
-    total_pages = len(pages_text)
-    threshold = max(3, total_pages * 0.7)
+    from collections import Counter
+    counts = Counter(all_lines)
+    threshold = len(pages) * 0.7
     
     # Identifica ruído
     noise = set()
-    for line, count in line_counts.items():
+    for line, count in counts.items():
         if count >= threshold and len(line) < 150:
             noise.add(line)
-        if re.match(r'^\d{1,4}$', line) and count >= 2:
-            noise.add(line)
-        if re.match(r'^\d{1,2}/\d{1,2}/\d{2,4}$', line):
+        if re.match(r'^\d+$', line) and count >= 2:
             noise.add(line)
     
-    # Limpa páginas
-    cleaned_pages = []
-    for page in pages_text:
-        lines = page.split('\n')
-        clean = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped in noise:
-                continue
-            if re.match(r'^\d+$', stripped):
-                continue
-            if stripped:
-                clean.append(stripped)
-        if clean:
-            cleaned_pages.append('\n'.join(clean))
+    # Limpa
+    clean = []
+    for page in pages:
+        lines = [l.strip() for l in page.split('\n') if l.strip() and l.strip() not in noise]
+        if lines:
+            clean.append('\n'.join(lines))
     
-    result = '\n\n'.join(cleaned_pages)
-    return result
+    return '\n\n'.join(clean)
 
-def full_cleanup(text):
-    """Pipeline completo de limpeza textual"""
-    if not text:
-        return ""
-    
-    # 1. Corrige hifenização
-    text = fix_hyphenation(text)
-    
-    # 2. Corrige palavras grudadas
-    text = fix_common_mistakes(text)
-    
-    # 3. Normaliza espaços
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-    text = re.sub(r' +', ' ', text)
-    
-    # 4. Remove espaços extras
-    text = text.strip()
-    
-    return text
-
-# ============================================
-# DIVISÃO DE TEXTO
-# ============================================
-
-def split_text_smart(text, max_chars=4000):
-    """Divide texto em partes inteligentes"""
+def split_text(text, max_chars=4000):
+    """Divide texto em partes"""
     if len(text) <= max_chars:
-        return [{"title": "Completo", "content": text}]
+        return [{"title": "Parte 1", "content": text}]
     
     parts = []
-    current = ""
-    part_num = 1
-    
-    # Divide por parágrafos
     paragraphs = text.split('\n\n')
+    current = ""
+    n = 1
     
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
+    for p in paragraphs:
+        p = p.strip()
+        if not p:
             continue
-        
-        # Se o parágrafo é muito longo, divide por frases
-        if len(para) > max_chars:
-            if current:
-                parts.append({"title": f"Parte {part_num}", "content": current.strip()})
-                part_num += 1
-                current = ""
-            
-            sentences = re.split(r'(?<=[.!?])\s+', para)
-            for sent in sentences:
-                if len(current) + len(sent) > max_chars and current:
-                    parts.append({"title": f"Parte {part_num}", "content": current.strip()})
-                    part_num += 1
-                    current = sent
-                else:
-                    current += (' ' if current else '') + sent
-            continue
-        
-        if len(current) + len(para) > max_chars and current:
-            parts.append({"title": f"Parte {part_num}", "content": current.strip()})
-            part_num += 1
-            current = para
+        if len(current) + len(p) > max_chars and current:
+            parts.append({"title": f"Parte {n}", "content": current.strip()})
+            n += 1
+            current = p
         else:
-            current += ('\n\n' if current else '') + para
+            current += ('\n\n' if current else '') + p
     
     if current.strip():
-        parts.append({"title": f"Parte {part_num}", "content": current.strip()})
+        parts.append({"title": f"Parte {n}", "content": current.strip()})
     
     return parts
 
-# ============================================
-# EXTRAÇÃO DE TEXTO (SEM CACHE PARA EVITAR ERROS)
-# ============================================
-
-def extract_text_from_pdf(file_bytes):
-    """Extrai texto de PDF"""
-    pages_text = []
-    
-    temp_file = TEMP_DIR / "temp.pdf"
-    temp_file.write_bytes(file_bytes)
+def extract_pdf(file_bytes):
+    """Extrai PDF"""
+    pages = []
+    tmp = TEMP_DIR / "tmp.pdf"
+    tmp.write_bytes(file_bytes)
     
     try:
-        with pdfplumber.open(temp_file) as pdf:
+        with pdfplumber.open(tmp) as pdf:
             for page in pdf.pages:
                 try:
-                    text = page.extract_text()
-                    if text and text.strip():
-                        pages_text.append(text.strip())
+                    t = page.extract_text()
+                    if t and t.strip():
+                        pages.append(t.strip())
                 except:
-                    continue
+                    pass
     finally:
-        if temp_file.exists():
-            temp_file.unlink()
+        if tmp.exists():
+            tmp.unlink()
     
-    if not pages_text:
-        return ""
-    
-    # Remove cabeçalhos/rodapés
-    text = remove_headers_footers(pages_text)
-    
-    # Limpeza completa
-    text = full_cleanup(text)
-    
-    return text
+    text = remove_headers_footers(pages)
+    return clean_text(text)
 
-def extract_text_from_epub(file_bytes):
-    """Extrai texto de EPUB"""
-    text_parts = []
-    
-    temp_file = TEMP_DIR / "temp.epub"
-    temp_file.write_bytes(file_bytes)
+def extract_epub(file_bytes):
+    """Extrai EPUB"""
+    parts = []
+    tmp = TEMP_DIR / "tmp.epub"
+    tmp.write_bytes(file_bytes)
     
     try:
-        book = epub.read_epub(temp_file)
+        book = epub.read_epub(tmp)
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             try:
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
-                for script in soup(["script", "style"]):
-                    script.decompose()
-                text = soup.get_text()
-                lines = [l.strip() for l in text.split('\n') if l.strip()]
+                for s in soup(["script", "style"]):
+                    s.decompose()
+                t = soup.get_text()
+                lines = [l.strip() for l in t.split('\n') if l.strip()]
                 if lines:
-                    text_parts.append('\n'.join(lines))
+                    parts.append('\n'.join(lines))
             except:
-                continue
+                pass
     finally:
-        if temp_file.exists():
-            temp_file.unlink()
+        if tmp.exists():
+            tmp.unlink()
     
-    text = '\n\n'.join(text_parts)
-    return full_cleanup(text)
+    return clean_text('\n\n'.join(parts))
 
-def extract_text_from_txt(file_bytes):
-    """Extrai texto de TXT"""
-    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-    
-    for encoding in encodings:
+def extract_txt(file_bytes):
+    """Extrai TXT"""
+    for enc in ['utf-8', 'latin-1', 'cp1252']:
         try:
-            text = file_bytes.decode(encoding)
-            if text.strip():
-                return full_cleanup(text)
+            return clean_text(file_bytes.decode(enc))
         except:
-            continue
-    
-    text = file_bytes.decode('utf-8', errors='replace')
-    return full_cleanup(text)
+            pass
+    return clean_text(file_bytes.decode('utf-8', errors='replace'))
 
-# ============================================
-# TTS - CONVERSÃO TEXTO PARA FALA
-# ============================================
-
-async def text_to_speech(text, voice, output_path):
-    """Converte texto em fala"""
+async def tts(text, voice, path):
+    """Texto para fala"""
     try:
-        # Limita tamanho
-        if len(text) > 5000:
-            text = text[:5000]
-        
-        # Limpa caracteres problemáticos
-        text = re.sub(r'[^\w\sáéíóúâêôãõçàèìòùäëïöüñÁÉÍÓÚÂÊÔÃÕÇÀÈÌÒÙÄËÏÖÜÑ.,!?;:()\-—\'\"\n]', ' ', text, flags=re.UNICODE)
-        text = ' '.join(text.split())
-        
-        if not text.strip():
-            return False
-        
-        communicator = edge_tts.Communicate(text, voice)
-        await communicator.save(output_path)
-        
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 1024
-    
-    except Exception:
-        return False
-
-def run_tts(text, voice, output_path):
-    """Wrapper síncrono para TTS"""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(text_to_speech(text, voice, output_path))
-        loop.close()
-        return result
+        text = text[:5000]
+        c = edge_tts.Communicate(text, voice)
+        await c.save(path)
+        return os.path.exists(path) and os.path.getsize(path) > 1024
     except:
         return False
 
-def clean_filename(filename):
-    """Limpa nome de arquivo"""
-    filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode('ASCII')
-    filename = re.sub(r'[^\w\s-]', '', filename)
-    filename = re.sub(r'[-\s]+', '_', filename)
-    return filename.strip('_')[:80]
+def run_tts(text, voice, path):
+    """Wrapper síncrono"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        r = loop.run_until_complete(tts(text, voice, path))
+        loop.close()
+        return r
+    except:
+        return False
 
-def format_time(seconds):
-    """Formata tempo"""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{seconds/60:.1f}min"
+def safe_filename(name):
+    """Nome de arquivo seguro"""
+    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
+    name = re.sub(r'[^\w\s-]', '', name).strip()
+    name = re.sub(r'[-\s]+', '_', name)
+    return name[:80]
+
+# ========== INTERFACE ==========
+
+st.title("🎧 AudioBook AI")
+st.write("Transforme texto em audiobook com inteligência textual")
+
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.subheader("📁 Entrada")
+    
+    method = st.radio("Método:", ["Upload de Arquivo", "Texto Manual"])
+    
+    if method == "Upload de Arquivo":
+        file = st.file_uploader("Arquivo:", type=['pdf', 'epub', 'txt'])
+        if file:
+            st.info(f"📄 {file.name} ({len(file.getvalue())/1024/1024:.1f} MB)")
+            if st.button("📖 Processar", use_container_width=True):
+                with st.spinner("Processando..."):
+                    try:
+                        if file.name.endswith('.pdf'):
+                            txt = extract_pdf(file.getvalue())
+                        elif file.name.endswith('.epub'):
+                            txt = extract_epub(file.getvalue())
+                        else:
+                            txt = extract_txt(file.getvalue())
+                        
+                        if txt and len(txt) > 50:
+                            st.session_state.text = txt
+                            st.session_state.parts = split_text(txt)
+                            st.session_state.audio = []
+                            st.success(f"✅ {len(txt):,} caracteres")
+                        else:
+                            st.error("Texto insuficiente")
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
     else:
-        return f"{seconds/3600:.1f}h"
+        txt = st.text_area("Texto:", height=200)
+        if txt and len(txt.strip()) >= 50:
+            if st.button("📝 Processar", use_container_width=True):
+                st.session_state.text = clean_text(txt)
+                st.session_state.parts = split_text(st.session_state.text)
+                st.session_state.audio = []
+                st.success(f"✅ {len(st.session_state.text):,} caracteres")
+    
+    st.subheader("🎤 Voz")
+    voice_name = st.selectbox("Selecione:", list(VOICES.keys()))
+    voice_id = VOICES[voice_name]
+    
+    if st.button("🔊 Testar", use_container_width=True):
+        with st.spinner("..."):
+            test_file = TEMP_DIR / "test.mp3"
+            if run_tts("Olá, esta é a voz selecionada.", voice_id, str(test_file)):
+                st.audio(str(test_file))
+    
+    if st.button("🗑️ Limpar", use_container_width=True):
+        st.session_state.text = None
+        st.session_state.parts = None
+        st.session_state.audio = []
+        import shutil
+        if TEMP_DIR.exists():
+            shutil.rmtree(TEMP_DIR)
+        TEMP_DIR.mkdir()
+        st.rerun()
 
-# ============================================
-# INTERFACE PRINCIPAL
-# ============================================
-
-def main():
-    # Inicializa sessão
-    for key in ['processed_text', 'text_parts', 'audio_files']:
-        if key not in st.session_state:
-            st.session_state[key] = None if key != 'audio_files' else []
-    
-    # Header
-    st.markdown("""
-    <div class="app-header">
-        <h1>🎧 AudioBook AI</h1>
-        <p>Transforme qualquer texto em audiobook profissional com inteligência textual</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Layout
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.markdown("### 📁 Fonte do Texto")
+with col2:
+    if 'text' not in st.session_state or not st.session_state.text:
+        st.info("👈 Faça upload de um arquivo ou digite texto para começar")
+    else:
+        txt = st.session_state.text
+        parts = st.session_state.parts
         
-        input_method = st.radio(
-            "Método de entrada:",
-            ["📤 Upload de Arquivo", "✍️ Digitar/colar Texto"]
-        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Caracteres", f"{len(txt):,}")
+        c2.metric("Palavras", f"{len(txt.split()):,}")
+        c3.metric("Partes", len(parts))
         
-        st.markdown("---")
+        with st.expander("Preview"):
+            st.text(txt[:2000] + ("..." if len(txt) > 2000 else ""))
         
-        uploaded_file = None
-        manual_text = ""
+        if st.button("🎙️ Gerar Audiobook", use_container_width=True, type="primary"):
+            out_dir = TEMP_DIR / "out"
+            out_dir.mkdir(exist_ok=True)
+            
+            for f in out_dir.glob("*.mp3"):
+                f.unlink()
+            
+            st.session_state.audio = []
+            bar = st.progress(0)
+            msg = st.empty()
+            
+            for i, part in enumerate(parts):
+                bar.progress((i+1)/len(parts))
+                msg.info(f"🎙️ {part['title']} ({i+1}/{len(parts)})")
+                
+                fname = f"{i+1:03d}_{safe_filename(part['title'])}.mp3"
+                out = out_dir / fname
+                
+                if run_tts(part['content'], voice_id, str(out)):
+                    st.session_state.audio.append(out)
+                time.sleep(0.3)
+            
+            bar.progress(1.0)
+            if st.session_state.audio:
+                msg.success(f"✅ {len(st.session_state.audio)}/{len(parts)} partes geradas!")
         
-        if input_method == "📤 Upload de Arquivo":
-            uploaded_file = st.file_uploader(
-                "Selecione o arquivo",
-                type=['pdf', 'epub', 'txt']
+        if st.session_state.get('audio'):
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for f in st.session_state.audio:
+                    zf.write(f, f.name)
+            
+            st.download_button(
+                f"📥 Baixar ZIP ({len(st.session_state.audio)} arquivos)",
+                zip_buf.getvalue(),
+                f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                "application/zip",
+                use_container_width=True
             )
             
-            if uploaded_file:
-                file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
-                st.info(f"📄 {uploaded_file.name} • {file_size:.1f} MB")
-                
-                if st.button("📖 Processar Arquivo", use_container_width=True):
-                    with st.spinner("Extraindo e limpando texto..."):
-                        try:
-                            if uploaded_file.name.endswith('.pdf'):
-                                text = extract_text_from_pdf(uploaded_file.getvalue())
-                            elif uploaded_file.name.endswith('.epub'):
-                                text = extract_text_from_epub(uploaded_file.getvalue())
-                            elif uploaded_file.name.endswith('.txt'):
-                                text = extract_text_from_txt(uploaded_file.getvalue())
-                            else:
-                                st.error("Formato não suportado")
-                                return
-                            
-                            if not text or len(text.strip()) < 50:
-                                st.error("Texto insuficiente extraído")
-                                return
-                            
-                            st.session_state.processed_text = text
-                            st.session_state.text_parts = split_text_smart(text)
-                            st.session_state.audio_files = []
-                            
-                            st.success(f"✅ {len(text):,} caracteres extraídos")
-                            
-                        except Exception as e:
-                            st.error(f"Erro: {str(e)[:200]}")
-        else:
-            manual_text = st.text_area(
-                "Digite ou cole seu texto:",
-                height=200,
-                placeholder="Seu texto aqui..."
-            )
-            
-            if manual_text and len(manual_text.strip()) >= 50:
-                if st.button("📝 Processar Texto", use_container_width=True):
-                    text = full_cleanup(manual_text)
-                    st.session_state.processed_text = text
-                    st.session_state.text_parts = split_text_smart(text)
-                    st.session_state.audio_files = []
-                    st.success(f"✅ {len(text):,} caracteres")
-        
-        st.markdown("---")
-        st.markdown("### 🎤 Voz")
-        
-        voice_category = st.selectbox("Categoria:", list(AVAILABLE_VOICES.keys()))
-        voice_name = st.selectbox("Voz:", list(AVAILABLE_VOICES[voice_category].keys()))
-        voice_id = AVAILABLE_VOICES[voice_category][voice_name]
-        
-        if st.button("🔊 Testar Voz", use_container_width=True):
-            with st.spinner("Testando..."):
-                test_file = TEMP_DIR / "test.mp3"
-                if run_tts("Olá! Esta é a voz selecionada para seu audiobook.", voice_id, str(test_file)):
-                    st.audio(str(test_file))
-                    st.success("✅ Voz ok!")
-                else:
-                    st.error("Erro no teste")
-        
-        st.markdown("---")
-        if st.button("🗑️ Limpar Tudo", use_container_width=True):
-            st.session_state.processed_text = None
-            st.session_state.text_parts = None
-            st.session_state.audio_files = []
-            if TEMP_DIR.exists():
-                shutil.rmtree(TEMP_DIR)
-            TEMP_DIR.mkdir()
-            st.rerun()
-    
-    with col2:
-        if not st.session_state.processed_text:
-            st.markdown("### 👋 Bem-vindo!")
-            st.markdown("""
-            <div class="info-box">
-            <h4>🧠 Recursos inteligentes:</h4>
-            <ul>
-                <li>✅ Correção de hifenização (cava-\\nlo → cavalo)</li>
-                <li>✅ Remoção de cabeçalhos/rodapés</li>
-                <li>✅ Remoção de números de página</li>
-                <li>✅ Correção de palavras grudadas</li>
-            </ul>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            text = st.session_state.processed_text
-            parts = st.session_state.text_parts
-            
-            # Stats
-            c1, c2, c3 = st.columns(3)
-            c1.metric("📝 Caracteres", f"{len(text):,}")
-            c2.metric("📚 Palavras", f"{len(text.split()):,}")
-            c3.metric("📑 Partes", len(parts))
-            
-            # Preview
-            with st.expander("👁️ Preview do texto limpo"):
-                st.text(text[:3000] + ("..." if len(text) > 3000 else ""))
-            
-            # Narração
-            st.markdown("---")
-            if st.button("🎙️ Gerar Audiobook", use_container_width=True, type="primary"):
-                output_dir = TEMP_DIR / "output"
-                output_dir.mkdir(exist_ok=True)
-                
-                # Limpa
-                for f in output_dir.glob("*.mp3"):
-                    f.unlink()
-                
-                st.session_state.audio_files = []
-                progress = st.progress(0)
-                status = st.empty()
-                
-                total = len(parts)
-                for i, part in enumerate(parts):
-                    progress.progress((i+1)/total)
-                    status.info(f"🎙️ {part['title']} ({i+1}/{total})")
-                    
-                    fname = f"{i+1:03d}_{clean_filename(part['title'])}.mp3"
-                    out = output_dir / fname
-                    
-                    if run_tts(part['content'], voice_id, str(out)):
-                        st.session_state.audio_files.append(out)
-                    else:
-                        status.warning(f"⚠️ Falha em: {part['title']}")
-                    
-                    time.sleep(0.3)
-                
-                progress.progress(1.0)
-                
-                if st.session_state.audio_files:
-                    status.markdown(f"""
-                    <div class="success-box">
-                    ✅ {len(st.session_state.audio_files)}/{total} partes geradas!
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    status.error("Nenhum arquivo gerado")
-            
-            # Download
-            if st.session_state.audio_files:
-                st.markdown("---")
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for f in st.session_state.audio_files:
-                        zf.write(f, f.name)
-                
-                st.download_button(
-                    f"📥 Baixar ZIP ({len(st.session_state.audio_files)} arquivos)",
-                    zip_buf.getvalue(),
-                    f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                    "application/zip",
-                    use_container_width=True
-                )
-                
-                # Preview
-                with st.expander("🎵 Preview"):
-                    for f in st.session_state.audio_files:
-                        st.audio(str(f))
-
-if __name__ == "__main__":
-    main()
+            with st.expander("🎵 Preview"):
+                for f in st.session_state.audio:
+                    st.audio(str(f))
