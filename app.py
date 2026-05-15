@@ -4,514 +4,797 @@ import edge_tts
 import os
 import zipfile
 import io
-import shutil
-import re
 import tempfile
-import unicodedata
-from collections import Counter
+import shutil
+from pathlib import Path
 from datetime import datetime
+import re
+import unicodedata
+from typing import List, Dict, Optional
 import pdfplumber
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-from pathlib import Path
-from typing import List, Dict
-import time
-import gc
-import traceback
 
-# --- CONFIGURAÇÃO ---
+# ============================================
+# CONFIGURAÇÃO INICIAL
+# ============================================
+
 st.set_page_config(
-    page_title="Narrador.AI Pro | Audiobook Inteligente",
+    page_title="AudioBook AI - Transforme Texto em Voz",
     page_icon="🎧",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- CSS SIMPLIFICADO E LEVE ---
+# ============================================
+# CSS PERSONALIZADO - DESIGN PREMIUM
+# ============================================
+
 st.markdown("""
 <style>
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
-        color: white;
-        margin-bottom: 1.5rem;
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
+    /* Tema Global */
+    * {
+        font-family: 'Inter', sans-serif;
     }
     
+    /* Header Principal */
+    .app-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
+        margin-bottom: 2rem;
+        box-shadow: 0 15px 35px rgba(102, 126, 234, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .app-header::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -50%;
+        width: 100%;
+        height: 100%;
+        background: rgba(255,255,255,0.1);
+        transform: rotate(45deg);
+    }
+    
+    .app-header h1 {
+        color: white;
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .app-header p {
+        color: rgba(255,255,255,0.9);
+        font-size: 1.2rem;
+        margin-top: 0.5rem;
+        position: relative;
+        z-index: 1;
+    }
+    
+    /* Cards de Features */
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin: 1.5rem 0;
+    }
+    
+    .feature-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        border: 1px solid #e8e8e8;
+        text-align: center;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    
+    .feature-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        border-color: #667eea;
+    }
+    
+    .feature-icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .feature-card h3 {
+        color: #333;
+        font-size: 1.1rem;
+        margin: 0.5rem 0;
+    }
+    
+    .feature-card p {
+        color: #666;
+        font-size: 0.9rem;
+        margin: 0;
+    }
+    
+    /* Botões */
     .stButton > button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         border: none;
-        padding: 0.6rem 1.5rem;
-        border-radius: 8px;
-        font-weight: 500;
-        transition: all 0.3s;
+        padding: 0.8rem 2rem;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        width: 100%;
     }
     
     .stButton > button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.5);
     }
     
-    .info-box {
-        background: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
+    .stButton > button:active {
+        transform: translateY(0);
     }
     
-    .success-box {
-        background: #d4edda;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #c3e6cb;
-        color: #155724;
+    /* Botão de teste de voz */
+    .test-button > button {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        box-shadow: 0 4px 15px rgba(17, 153, 142, 0.3);
+    }
+    
+    .test-button > button:hover {
+        box-shadow: 0 8px 25px rgba(17, 153, 142, 0.5);
+    }
+    
+    /* Área de Upload */
+    .upload-area {
+        border: 2px dashed #667eea;
+        border-radius: 15px;
+        padding: 2rem;
+        text-align: center;
+        background: #f8f9ff;
+        transition: all 0.3s ease;
+    }
+    
+    .upload-area:hover {
+        background: #f0f1ff;
+        border-color: #764ba2;
+    }
+    
+    /* Cards de Estatísticas */
+    .stat-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .stat-card {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+    }
+    
+    .stat-value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #667eea;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        color: #666;
+        margin-top: 0.25rem;
+    }
+    
+    /* Player de Áudio */
+    .audio-player-container {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 15px;
+        border: 1px solid #e8e8e8;
+        margin: 1rem 0;
+    }
+    
+    /* Mensagens */
+    .success-message {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        color: white;
+        margin: 1rem 0;
+    }
+    
+    .info-message {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        color: white;
+        margin: 1rem 0;
+    }
+    
+    /* Rodapé */
+    .footer {
+        text-align: center;
+        padding: 2rem;
+        color: #999;
+        font-size: 0.9rem;
+    }
+    
+    /* Esconder elementos padrão */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Responsividade */
+    @media (max-width: 768px) {
+        .app-header h1 {
+            font-size: 1.8rem;
+        }
+        .app-header p {
+            font-size: 1rem;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- DIRETÓRIOS ---
-OUTPUT_DIR = Path("audiobook_output")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# ============================================
+# CONFIGURAÇÕES E CONSTANTES
+# ============================================
 
-# --- VOZES VALIDADAS ---
-VOICES = {
-    "🇧🇷 Português": {
-        "Antonio (Masculino)": "pt-BR-AntonioNeural",
-        "Francisca (Feminina)": "pt-BR-FranciscaNeural",
-        "Brenda (Feminina)": "pt-BR-BrendaNeural",
-        "Donato (Masculino)": "pt-BR-DonatoNeural",
-        "Thalita (Feminina)": "pt-BR-ThalitaNeural"
+# Diretório temporário para arquivos
+TEMP_DIR = Path(tempfile.mkdtemp())
+
+# Vozes disponíveis (validadas e testadas)
+AVAILABLE_VOICES = {
+    "🇧🇷 Português Brasileiro": {
+        "Antonio - Voz Masculina Profissional": "pt-BR-AntonioNeural",
+        "Francisca - Voz Feminina Natural": "pt-BR-FranciscaNeural",
+        "Brenda - Voz Feminina Jovem": "pt-BR-BrendaNeural",
+        "Donato - Voz Masculina Madura": "pt-BR-DonatoNeural",
+        "Thalita - Voz Feminina Suave": "pt-BR-ThalitaNeural"
     },
-    "🌍 Multilíngue": {
-        "Alessio (Italiano)": "it-IT-AlessioMultilingualNeural",
-        "Andrew (Inglês)": "en-US-AndrewMultilingualNeural",
-        "Emma (Inglês)": "en-US-EmmaMultilingualNeural",
-        "Ava (Inglês)": "en-US-AvaMultilingualNeural"
+    "🌍 Vozes Multilíngue": {
+        "Alessio - Italiano (Multilíngue)": "it-IT-AlessioMultilingualNeural",
+        "Andrew - Inglês Americano (Multilíngue)": "en-US-AndrewMultilingualNeural",
+        "Emma - Inglês Americano (Multilíngue)": "en-US-EmmaMultilingualNeural",
+        "Ava - Inglês Americano (Multilíngue)": "en-US-AvaMultilingualNeural"
     },
     "🇺🇸 Inglês": {
-        "Jenny (Feminina)": "en-US-JennyNeural",
-        "Guy (Masculino)": "en-US-GuyNeural"
+        "Jenny - Voz Feminina Americana": "en-US-JennyNeural",
+        "Guy - Voz Masculina Americana": "en-US-GuyNeural"
     }
 }
 
-# --- FUNÇÕES AUXILIARES ---
-def limpar_texto(texto: str) -> str:
-    """Limpa texto removendo caracteres problemáticos"""
-    # Remove caracteres de controle exceto newlines e tabs
-    texto = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', texto)
-    # Normaliza espaços
-    texto = re.sub(r'\n\s*\n\s*\n+', '\n\n', texto)
-    # Remove linhas muito curtas repetidas
-    linhas = texto.split('\n')
-    linhas_filtradas = []
-    for linha in linhas:
-        linha = linha.strip()
-        if len(linha) > 2 or (len(linha) == 0 and len(linhas_filtradas) > 0 and linhas_filtradas[-1] != ''):
-            linhas_filtradas.append(linha)
-    return '\n'.join(linhas_filtradas)
+# ============================================
+# FUNÇÕES UTILITÁRIAS
+# ============================================
 
-def normalizar_nome(texto: str) -> str:
-    """Normaliza nome do arquivo"""
-    texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII')
-    texto = re.sub(r'[^\w\s-]', '', texto).strip()
-    texto = re.sub(r'[-\s]+', '_', texto)
-    return texto[:80]
+def clean_filename(filename: str) -> str:
+    """Limpa nome de arquivo removendo caracteres especiais"""
+    # Remove acentos
+    filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode('ASCII')
+    # Remove caracteres não permitidos
+    filename = re.sub(r'[^\w\s-]', '', filename)
+    # Substitui espaços por underscore
+    filename = re.sub(r'[-\s]+', '_', filename)
+    return filename.strip('_')[:100]
 
-async def narrar_async(texto: str, voz: str, arquivo_saida: str) -> bool:
-    """Narração assíncrona simplificada"""
+def format_time(seconds: float) -> str:
+    """Formata tempo em formato legível"""
+    if seconds < 60:
+        return f"{seconds:.0f} segundos"
+    elif seconds < 3600:
+        minutes = seconds / 60
+        return f"{minutes:.1f} minutos"
+    else:
+        hours = seconds / 3600
+        return f"{hours:.1f} horas"
+
+def split_text_smart(text: str, max_chars: int = 4000) -> List[Dict]:
+    """Divide texto em partes inteligentes respeitando parágrafos"""
+    if len(text) <= max_chars:
+        return [{"title": "Completo", "content": text}]
+    
+    # Divide por parágrafos
+    paragraphs = text.split('\n\n')
+    parts = []
+    current_part = ""
+    part_number = 1
+    
+    for paragraph in paragraphs:
+        # Se adicionar este parágrafo exceder o limite
+        if len(current_part) + len(paragraph) > max_chars and current_part:
+            parts.append({
+                "title": f"Parte {part_number}",
+                "content": current_part.strip()
+            })
+            current_part = paragraph
+            part_number += 1
+        else:
+            if current_part:
+                current_part += '\n\n' + paragraph
+            else:
+                current_part = paragraph
+    
+    # Adiciona última parte
+    if current_part:
+        parts.append({
+            "title": f"Parte {part_number}",
+            "content": current_part.strip()
+        })
+    
+    return parts
+
+# ============================================
+# FUNÇÕES DE EXTRAÇÃO DE TEXTO
+# ============================================
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Extrai texto de arquivo PDF"""
+    text_parts = []
+    
+    # Cria arquivo temporário
+    temp_file = TEMP_DIR / "temp.pdf"
+    temp_file.write_bytes(file_bytes)
+    
     try:
-        # Limita tamanho do texto por chunk para evitar problemas
-        if len(texto) > 5000:
-            texto = texto[:5000]
-        
-        comunicacao = edge_tts.Communicate(
-            text=texto,
-            voice=voz
-        )
-        await comunicacao.save(arquivo_saida)
-        return os.path.exists(arquivo_saida) and os.path.getsize(arquivo_saida) > 0
-    except Exception as e:
-        st.error(f"Erro detalhado: {str(e)}")
-        return False
+        with pdfplumber.open(temp_file) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    # Limpa texto da página
+                    text = text.strip()
+                    if text:
+                        text_parts.append(text)
+    finally:
+        # Remove arquivo temporário
+        if temp_file.exists():
+            temp_file.unlink()
+    
+    return '\n\n'.join(text_parts)
 
-def executar_narracao(texto: str, voz: str, arquivo_saida: str) -> bool:
-    """Wrapper síncrono para narração"""
+def extract_text_from_epub(file_bytes: bytes) -> str:
+    """Extrai texto de arquivo EPUB"""
+    text_parts = []
+    
+    # Cria arquivo temporário
+    temp_file = TEMP_DIR / "temp.epub"
+    temp_file.write_bytes(file_bytes)
+    
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        resultado = loop.run_until_complete(narrar_async(texto, voz, arquivo_saida))
-        loop.close()
-        return resultado
-    except Exception as e:
-        st.error(f"Erro na execução: {str(e)}")
-        return False
-
-# --- PROCESSAMENTO DE PDF (OTIMIZADO) ---
-@st.cache_data(ttl=3600)
-def extrair_pdf(conteudo_bytes: bytes, nome_arquivo: str) -> str:
-    """Extrai texto de PDF com cache"""
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-            tmp.write(conteudo_bytes)
-            tmp_path = tmp.name
-        
-        texto_completo = []
-        with pdfplumber.open(tmp_path) as pdf:
-            # Processa em lotes para não sobrecarregar memória
-            total_paginas = len(pdf.pages)
-            for i, pagina in enumerate(pdf.pages):
-                if i % 50 == 0:  # Log a cada 50 páginas
-                    st.write(f"Processando página {i+1} de {total_paginas}...")
-                
-                texto = pagina.extract_text()
-                if texto:
-                    texto_completo.append(texto)
-                
-                # Libera memória periodicamente
-                if i % 100 == 0:
-                    gc.collect()
-        
-        os.unlink(tmp_path)
-        return '\n'.join(texto_completo)
-    except Exception as e:
-        st.error(f"Erro ao extrair PDF: {str(e)}")
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        return ""
-
-@st.cache_data(ttl=3600)
-def extrair_epub(conteudo_bytes: bytes) -> str:
-    """Extrai texto de EPUB com cache"""
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.epub') as tmp:
-            tmp.write(conteudo_bytes)
-            tmp_path = tmp.name
-        
-        texto_completo = []
-        book = epub.read_epub(tmp_path)
+        book = epub.read_epub(temp_file)
         
         for item in book.get_items_of_type(ITEM_DOCUMENT):
             try:
+                # Parse HTML
                 soup = BeautifulSoup(item.get_content(), 'html.parser')
+                
+                # Remove scripts e estilos
                 for script in soup(["script", "style"]):
                     script.decompose()
-                texto = soup.get_text()
-                if texto.strip():
-                    texto_completo.append(texto)
+                
+                # Extrai texto
+                text = soup.get_text()
+                
+                # Limpa texto
+                lines = []
+                for line in text.split('\n'):
+                    line = line.strip()
+                    if line:
+                        lines.append(line)
+                
+                if lines:
+                    text_parts.append('\n'.join(lines))
             except:
                 continue
+    finally:
+        # Remove arquivo temporário
+        if temp_file.exists():
+            temp_file.unlink()
+    
+    return '\n\n'.join(text_parts)
+
+def extract_text_from_txt(file_bytes: bytes) -> str:
+    """Extrai texto de arquivo TXT com detecção de encoding"""
+    # Tenta diferentes encodings
+    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    
+    for encoding in encodings:
+        try:
+            text = file_bytes.decode(encoding)
+            if text.strip():
+                return text
+        except:
+            continue
+    
+    # Fallback com substituição de caracteres
+    return file_bytes.decode('utf-8', errors='replace')
+
+# ============================================
+# FUNÇÃO DE NARRAÇÃO (TTS)
+# ============================================
+
+async def text_to_speech(text: str, voice: str, output_path: str) -> bool:
+    """Converte texto em fala usando Edge TTS"""
+    try:
+        # Limita tamanho do texto para evitar erros
+        if len(text) > 5000:
+            text = text[:5000]
         
-        os.unlink(tmp_path)
-        return '\n'.join(texto_completo)
+        # Cria comunicador
+        communicator = edge_tts.Communicate(text, voice)
+        
+        # Salva áudio
+        await communicator.save(output_path)
+        
+        # Verifica se o arquivo foi criado
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    
     except Exception as e:
-        st.error(f"Erro ao extrair EPUB: {str(e)}")
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        return ""
+        st.error(f"Erro na narração: {str(e)}")
+        return False
 
-def dividir_em_partes(texto: str, tamanho_max: int = 3000) -> List[Dict]:
-    """Divide texto em partes menores para processamento"""
-    if len(texto) <= tamanho_max:
-        return [{"titulo": "Completo", "conteudo": texto}]
-    
-    # Tenta dividir por parágrafos
-    paragrafos = texto.split('\n\n')
-    partes = []
-    parte_atual = ""
-    contador = 1
-    
-    for paragrafo in paragrafos:
-        if len(parte_atual) + len(paragrafo) > tamanho_max and parte_atual:
-            partes.append({
-                "titulo": f"Parte {contador}",
-                "conteudo": parte_atual.strip()
-            })
-            parte_atual = paragrafo
-            contador += 1
-        else:
-            parte_atual += ('\n\n' if parte_atual else '') + paragrafo
-    
-    if parte_atual:
-        partes.append({
-            "titulo": f"Parte {contador}",
-            "conteudo": parte_atual.strip()
-        })
-    
-    return partes
+def run_async_tts(text: str, voice: str, output_path: str) -> bool:
+    """Executa TTS de forma síncrona (para Streamlit)"""
+    try:
+        # Cria novo event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Executa
+        result = loop.run_until_complete(
+            text_to_speech(text, voice, output_path)
+        )
+        
+        # Fecha loop
+        loop.close()
+        
+        return result
+    except Exception as e:
+        st.error(f"Erro ao executar TTS: {str(e)}")
+        return False
 
-# --- INTERFACE PRINCIPAL ---
+# ============================================
+# INTERFACE DO USUÁRIO
+# ============================================
+
 def main():
-    # Header
+    # Inicializa estado da sessão
+    if 'processed_text' not in st.session_state:
+        st.session_state.processed_text = None
+    if 'text_parts' not in st.session_state:
+        st.session_state.text_parts = None
+    if 'audio_files' not in st.session_state:
+        st.session_state.audio_files = []
+    
+    # ============================================
+    # HEADER
+    # ============================================
+    
     st.markdown("""
-    <div class="main-header">
-        <h1>🎧 Narrador.AI Pro</h1>
-        <p>Transforme documentos em audiobooks com vozes neurais</p>
+    <div class="app-header">
+        <h1>🎧 AudioBook AI</h1>
+        <p>Transforme qualquer texto em audiobook profissional com vozes neurais de última geração</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown("### 📁 Entrada")
+    # ============================================
+    # LAYOUT PRINCIPAL (2 COLUNAS)
+    # ============================================
+    
+    col1, col2 = st.columns([1, 2])
+    
+    # ============================================
+    # COLUNA 1 - CONFIGURAÇÕES
+    # ============================================
+    
+    with col1:
+        st.markdown("### 📁 Fonte do Texto")
         
-        metodo_entrada = st.radio(
-            "Escolha o método:",
-            ["📄 Upload de Arquivo", "✍️ Texto Manual"],
-            key="metodo"
+        # Seleção do método de entrada
+        input_method = st.radio(
+            "Como deseja fornecer o texto?",
+            ["📤 Upload de Arquivo", "✍️ Digitar/colar Texto"],
+            help="Escolha entre fazer upload de um arquivo ou digitar o texto manualmente"
         )
         
-        arquivo = None
-        texto_manual = ""
+        st.markdown("---")
         
-        if metodo_entrada == "📄 Upload de Arquivo":
-            arquivo = st.file_uploader(
+        if input_method == "📤 Upload de Arquivo":
+            # Upload de arquivo
+            uploaded_file = st.file_uploader(
                 "Selecione o arquivo",
-                type=["pdf", "epub", "txt"],
-                help="PDF, EPUB ou TXT"
+                type=['pdf', 'epub', 'txt'],
+                help="Formatos aceitos: PDF, EPUB e TXT"
             )
             
-            if arquivo:
-                st.info(f"📄 Arquivo: {arquivo.name}")
+            if uploaded_file:
+                # Informações do arquivo
+                file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
+                st.info(f"""
+                **Arquivo:** {uploaded_file.name}  
+                **Tamanho:** {file_size:.1f} MB
+                """)
                 
-                # Mostra tamanho do arquivo
-                tamanho_mb = len(arquivo.getvalue()) / (1024*1024)
-                st.write(f"Tamanho: {tamanho_mb:.1f} MB")
-                
-                if tamanho_mb > 50:
-                    st.warning("⚠️ Arquivo grande detectado. O processamento pode ser mais lento.")
+                # Botão para processar
+                if st.button("📖 Processar Arquivo", use_container_width=True):
+                    with st.spinner("Extraindo texto do arquivo..."):
+                        try:
+                            # Extrai texto baseado no tipo
+                            if uploaded_file.name.endswith('.pdf'):
+                                text = extract_text_from_pdf(uploaded_file.getvalue())
+                            elif uploaded_file.name.endswith('.epub'):
+                                text = extract_text_from_epub(uploaded_file.getvalue())
+                            elif uploaded_file.name.endswith('.txt'):
+                                text = extract_text_from_txt(uploaded_file.getvalue())
+                            else:
+                                st.error("Formato não suportado")
+                                return
+                            
+                            # Verifica se extraiu algo
+                            if not text or len(text.strip()) < 50:
+                                st.error("Não foi possível extrair texto suficiente do arquivo")
+                                return
+                            
+                            # Armazena na sessão
+                            st.session_state.processed_text = text
+                            st.session_state.text_parts = split_text_smart(text)
+                            
+                            st.success(f"✅ Texto extraído: {len(text):,} caracteres")
+                            
+                        except Exception as e:
+                            st.error(f"Erro ao processar arquivo: {str(e)}")
+                            return
         else:
-            texto_manual = st.text_area(
-                "Digite ou cole o texto:",
+            # Entrada manual de texto
+            manual_text = st.text_area(
+                "Digite ou cole seu texto",
                 height=200,
-                placeholder="Seu texto aqui...",
+                placeholder="Cole aqui o texto que deseja transformar em audiobook...",
                 help="Mínimo de 50 caracteres"
             )
+            
+            if manual_text and len(manual_text.strip()) >= 50:
+                if st.button("📝 Processar Texto", use_container_width=True):
+                    st.session_state.processed_text = manual_text
+                    st.session_state.text_parts = split_text_smart(manual_text)
+                    st.success(f"✅ Texto processado: {len(manual_text):,} caracteres")
         
+        # Configurações de voz
         st.markdown("---")
-        st.markdown("### 🎤 Voz")
+        st.markdown("### 🎤 Configurações de Voz")
         
-        categoria = st.selectbox("Categoria:", list(VOICES.keys()))
-        voz_nome = st.selectbox("Voz:", list(VOICES[categoria].keys()))
+        # Seleção de categoria
+        voice_category = st.selectbox(
+            "Categoria de Voz",
+            list(AVAILABLE_VOICES.keys()),
+            help="Escolha o idioma/categoria da voz"
+        )
         
-        voz_id = VOICES[categoria][voz_nome]
+        # Seleção de voz específica
+        voice_name = st.selectbox(
+            "Voz",
+            list(AVAILABLE_VOICES[voice_category].keys()),
+            help="Escolha a voz específica para narração"
+        )
         
-        # Preview da voz
-        if st.button("🔊 Testar Voz", use_container_width=True):
-            with st.spinner("Testando voz..."):
-                texto_teste = "Olá, esta é uma demonstração da voz selecionada."
-                arquivo_teste = OUTPUT_DIR / "teste_voz.mp3"
+        voice_id = AVAILABLE_VOICES[voice_category][voice_name]
+        
+        # Botão de teste de voz
+        st.markdown('<div class="test-button">', unsafe_allow_html=True)
+        if st.button("🔊 Testar Voz Selecionada", use_container_width=True):
+            with st.spinner("Gerando teste de voz..."):
+                test_text = "Olá! Esta é uma demonstração da voz selecionada para o seu audiobook."
+                test_file = TEMP_DIR / "voice_test.mp3"
                 
-                sucesso = executar_narracao(texto_teste, voz_id, str(arquivo_teste))
-                
-                if sucesso:
-                    st.audio(str(arquivo_teste))
-                    st.success("✅ Voz funcionando corretamente!")
+                if run_async_tts(test_text, voice_id, str(test_file)):
+                    st.audio(str(test_file))
+                    st.success("✅ Voz testada com sucesso!")
                 else:
-                    st.error("❌ Erro ao testar voz. Verifique sua conexão com a internet.")
+                    st.error("Erro ao testar voz. Verifique sua conexão com a internet.")
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        if st.button("🗑️ Limpar Tudo", use_container_width=True):
-            if OUTPUT_DIR.exists():
-                shutil.rmtree(OUTPUT_DIR)
-            OUTPUT_DIR.mkdir()
-            st.cache_data.clear()
+        # Botão de reset
+        st.markdown("---")
+        if st.button("🗑️ Limpar Tudo e Recomeçar", use_container_width=True):
+            # Limpa sessão
+            st.session_state.processed_text = None
+            st.session_state.text_parts = None
+            st.session_state.audio_files = []
+            
+            # Limpa diretório temporário
+            if TEMP_DIR.exists():
+                shutil.rmtree(TEMP_DIR)
+            TEMP_DIR.mkdir()
+            
             st.rerun()
     
-    # Área principal
-    st.markdown("### 📚 Processamento")
+    # ============================================
+    # COLUNA 2 - VISUALIZAÇÃO E PROCESSAMENTO
+    # ============================================
     
-    # Determina se há conteúdo
-    tem_conteudo = False
-    
-    if metodo_entrada == "📄 Upload de Arquivo" and arquivo:
-        tem_conteudo = True
-    elif metodo_entrada == "✍️ Texto Manual" and len(texto_manual.strip()) > 50:
-        tem_conteudo = True
-        # Cria arquivo virtual
-        arquivo = io.BytesIO(texto_manual.encode('utf-8'))
-        arquivo.name = "texto_manual.txt"
-    
-    if tem_conteudo:
-        # Processa o texto (com cache)
-        chave_cache = f"{arquivo.name}_{len(arquivo.getvalue())}"
-        
-        if 'texto_processado' not in st.session_state or st.session_state.get('cache') != chave_cache:
-            with st.spinner("📖 Extraindo texto do documento..."):
-                try:
-                    if arquivo.name.endswith('.pdf'):
-                        texto_bruto = extrair_pdf(arquivo.getvalue(), arquivo.name)
-                    elif arquivo.name.endswith('.epub'):
-                        texto_bruto = extrair_epub(arquivo.getvalue())
-                    elif arquivo.name.endswith('.txt') or arquivo.name == "texto_manual.txt":
-                        texto_bruto = arquivo.getvalue().decode('utf-8', errors='ignore')
-                    else:
-                        st.error("Formato não suportado")
-                        return
-                    
-                    # Limpa e prepara
-                    texto_limpo = limpar_texto(texto_bruto)
-                    
-                    if len(texto_limpo) < 50:
-                        st.error("❌ Texto muito curto ou não foi possível extrair conteúdo.")
-                        return
-                    
-                    st.session_state.texto_processado = texto_limpo
-                    st.session_state.cache = chave_cache
-                    st.session_state.partes = None
-                    
-                except Exception as e:
-                    st.error(f"Erro no processamento: {str(e)}")
-                    return
-        
-        texto = st.session_state.texto_processado
-        
-        # Informações do texto
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("📝 Caracteres", f"{len(texto):,}")
-        with col2:
-            palavras = len(texto.split())
-            st.metric("📊 Palavras", f"{palavras:,}")
-        with col3:
-            tempo_estimado = len(texto) / 1000 * 0.3
-            st.metric("⏱️ Tempo Estimado", f"{tempo_estimado:.1f} min")
-        
-        # Preview do texto
-        with st.expander("👁️ Visualizar Texto Extraído"):
-            st.text_area(
-                "Conteúdo:",
-                texto[:5000] + ("..." if len(texto) > 5000 else ""),
-                height=200,
-                disabled=True
-            )
-        
-        # Divisão em partes
-        if st.session_state.partes is None:
-            st.session_state.partes = dividir_em_partes(texto)
-        
-        partes = st.session_state.partes
-        
-        st.info(f"📑 Documento dividido em {len(partes)} parte(s) para processamento")
-        
-        # Narração
-        if st.button("🎬 Gerar Audiobook", use_container_width=True, type="primary"):
-            if len(texto) > 100000:
-                st.warning("⚠️ Texto muito longo. O processamento pode levar vários minutos.")
+    with col2:
+        # Se não tem texto processado, mostra welcome
+        if not st.session_state.processed_text:
+            st.markdown("### 👋 Bem-vindo ao AudioBook AI!")
             
-            barra_progresso = st.progress(0)
-            status = st.empty()
-            
-            # Limpa diretório de saída
-            for arquivo in OUTPUT_DIR.glob("*.mp3"):
-                try:
-                    arquivo.unlink()
-                except:
-                    pass
-            
-            inicio = time.time()
-            arquivos_gerados = []
-            
-            for i, parte in enumerate(partes):
-                progresso = (i + 1) / len(partes)
-                barra_progresso.progress(progresso)
-                
-                status.info(f"🎙️ Narrando {parte['titulo']}... ({i+1}/{len(partes)})")
-                
-                nome_arquivo = f"{i+1:03d}_{normalizar_nome(parte['titulo'])}.mp3"
-                caminho_saida = OUTPUT_DIR / nome_arquivo
-                
-                sucesso = executar_narracao(parte['conteudo'], voz_id, str(caminho_saida))
-                
-                if sucesso:
-                    arquivos_gerados.append(caminho_saida)
-                else:
-                    st.error(f"❌ Falha ao narrar {parte['titulo']}")
-                    break
-                
-                # Libera memória
-                gc.collect()
-                
-                # Pequena pausa para evitar sobrecarga
-                time.sleep(0.5)
-            
-            barra_progresso.progress(1.0)
-            tempo_total = time.time() - inicio
-            
-            if arquivos_gerados:
-                # Sucesso
-                status.markdown(f"""
-                <div class="success-box">
-                <h4>✅ Audiobook Gerado com Sucesso!</h4>
-                <p>📁 {len(arquivos_gerados)} arquivos<br>
-                ⏱️ Tempo total: {tempo_total/60:.1f} minutos</p>
+            # Grid de features
+            st.markdown("""
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📄</div>
+                    <h3>Múltiplos Formatos</h3>
+                    <p>PDF, EPUB e TXT</p>
                 </div>
-                """, unsafe_allow_html=True)
+                <div class="feature-card">
+                    <div class="feature-icon">🎤</div>
+                    <h3>Vozes Neurais</h3>
+                    <p>+10 vozes premium</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌍</div>
+                    <h3>Multilíngue</h3>
+                    <p>Português, Inglês, Italiano</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Rápido</h3>
+                    <p>Processamento otimizado</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Instruções
+            st.markdown("""
+            <div class="info-message">
+                <h4>🚀 Como começar:</h4>
+                <ol>
+                    <li>Escolha como fornecer o texto (upload ou digitação)</li>
+                    <li>Selecione a voz desejada</li>
+                    <li>Teste a voz para confirmar</li>
+                    <li>Clique em "Gerar Audiobook"</li>
+                    <li>Faça o download dos arquivos</li>
+                </ol>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        else:
+            # Mostra informações do texto processado
+            text = st.session_state.processed_text
+            parts = st.session_state.text_parts
+            
+            # Estatísticas
+            st.markdown("### 📊 Estatísticas do Texto")
+            
+            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+            
+            with stat_col1:
+                st.metric("📝 Caracteres", f"{len(text):,}")
+            
+            with stat_col2:
+                word_count = len(text.split())
+                st.metric("📚 Palavras", f"{word_count:,}")
+            
+            with stat_col3:
+                part_count = len(parts)
+                st.metric("📑 Partes", part_count)
+            
+            with stat_col4:
+                estimated_time = len(text) / 1000 * 0.5
+                st.metric("⏱️ Tempo Est.", format_time(estimated_time))
+            
+            # Preview do texto
+            with st.expander("👁️ Visualizar Texto Extraído", expanded=False):
+                preview = text[:1000] + "..." if len(text) > 1000 else text
+                st.text_area("Conteúdo:", preview, height=200, disabled=True)
+            
+            # Lista de partes
+            if len(parts) > 1:
+                with st.expander(f"📋 Ver {len(parts)} Partes", expanded=False):
+                    for i, part in enumerate(parts, 1):
+                        st.write(f"**{i}. {part['title']}** - {len(part['content']):,} caracteres")
+            
+            # Botão de gerar audiobook
+            st.markdown("---")
+            st.markdown("### 🎬 Gerar Audiobook")
+            
+            if st.button("🎙️ Iniciar Narração", use_container_width=True, type="primary"):
+                # Prepara diretório de saída
+                output_dir = TEMP_DIR / "audiobook_output"
+                output_dir.mkdir(exist_ok=True)
                 
-                # Criar ZIP
+                # Limpa arquivos anteriores
+                st.session_state.audio_files = []
+                
+                # Barra de progresso
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Processa cada parte
+                for i, part in enumerate(parts):
+                    # Atualiza progresso
+                    progress = (i + 1) / len(parts)
+                    progress_bar.progress(progress)
+                    status_text.info(f"🎙️ Narrando {part['title']}... ({i+1}/{len(parts)})")
+                    
+                    # Gera nome do arquivo
+                    filename = f"{i+1:03d}_{clean_filename(part['title'])}.mp3"
+                    output_file = output_dir / filename
+                    
+                    # Converte para áudio
+                    success = run_async_tts(part['content'], voice_id, str(output_file))
+                    
+                    if success:
+                        st.session_state.audio_files.append(output_file)
+                    else:
+                        status_text.error(f"❌ Erro ao narrar {part['title']}")
+                        break
+                
+                # Finaliza
+                progress_bar.progress(1.0)
+                
+                if st.session_state.audio_files:
+                    status_text.markdown("""
+                    <div class="success-message">
+                        <h4>✅ Audiobook Gerado com Sucesso!</h4>
+                        <p>Seu audiobook está pronto para download.</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    status_text.error("❌ Nenhum arquivo de áudio foi gerado")
+            
+            # Mostra arquivos gerados e opções de download
+            if st.session_state.audio_files:
+                st.markdown("---")
+                st.markdown("### 📥 Download e Preview")
+                
+                # Criar ZIP com todos os arquivos
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for arquivo in sorted(arquivos_gerados):
-                        zf.write(arquivo, arquivo.name)
+                    for audio_file in st.session_state.audio_files:
+                        zf.write(audio_file, audio_file.name)
                 
-                # Download
-                col1, col2 = st.columns([2, 1])
-                with col1:
+                # Botão de download
+                col_download, col_space = st.columns([2, 1])
+                with col_download:
                     st.download_button(
-                        "📥 Baixar Audiobook (ZIP)",
-                        zip_buffer.getvalue(),
-                        f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                        "application/zip",
+                        label="📥 Baixar Audiobook Completo (ZIP)",
+                        data=zip_buffer.getvalue(),
+                        file_name=f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        mime="application/zip",
                         use_container_width=True
                     )
                 
-                # Preview
-                with st.expander("🎵 Ouvir Capítulos"):
-                    for arquivo in sorted(arquivos_gerados):
-                        st.write(f"📁 {arquivo.name}")
-                        st.audio(str(arquivo))
-            else:
-                status.error("❌ Nenhum arquivo foi gerado. Verifique sua conexão.")
+                # Preview individual
+                st.markdown("#### 🎵 Preview dos Arquivos")
+                
+                for audio_file in st.session_state.audio_files:
+                    with st.expander(f"🎧 {audio_file.name}", expanded=False):
+                        st.audio(str(audio_file))
     
-    else:
-        # Instruções
-        st.markdown("""
-        <div class="info-box">
-        <h4>👋 Bem-vindo ao Narrador.AI Pro!</h4>
-        <p>Para começar:</p>
-        <ol>
-            <li>Escolha o método de entrada (upload ou texto manual)</li>
-            <li>Selecione a voz desejada</li>
-            <li>Clique em "Testar Voz" para verificar</li>
-            <li>Processe e gere seu audiobook</li>
-        </ol>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Cards informativos
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("#### 📄 Formatos")
-            st.write("- PDF (até 500 págs)")
-            st.write("- EPUB")
-            st.write("- TXT")
-        
-        with col2:
-            st.markdown("#### 🎤 Vozes")
-            st.write("- 12+ vozes neurais")
-            st.write("- 3 idiomas")
-            st.write("- Voz Alessio Multilíngue")
-        
-        with col3:
-            st.markdown("#### ⚡ Recursos")
-            st.write("- Texto manual")
-            st.write("- Preview de voz")
-            st.write("- Download em ZIP")
+    # ============================================
+    # RODAPÉ
+    # ============================================
+    
+    st.markdown("---")
+    st.markdown("""
+    <div class="footer">
+        <p>🎧 AudioBook AI v1.0 | Tecnologia Microsoft Edge TTS | Desenvolvido com Streamlit</p>
+        <p>Transformando texto em voz de forma simples e profissional</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-# --- RODAPÉ ---
-st.markdown("---")
-st.markdown(
-    "<p style='text-align: center; color: #888;'>Narrador.AI Pro v2.1 | Edge TTS | Streamlit</p>",
-    unsafe_allow_html=True
-)
+# ============================================
+# EXECUÇÃO
+# ============================================
 
 if __name__ == "__main__":
     main()
