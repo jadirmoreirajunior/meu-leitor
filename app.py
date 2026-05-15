@@ -91,13 +91,21 @@ TEMP_DIR = Path(tempfile.mkdtemp())
 
 AVAILABLE_VOICES = {
     "🇧🇷 Português Brasileiro": {
-        "Alessio - Voz Fluida (Multilingual)": "it-IT-AlessioNeural",
-        "Elsa - Voz Narrativa (Multilingual)": "it-IT-ElsaNeural",
-        "Giuseppe - Voz Sóbria (Multilingual": "it-IT-GiuseppeNeural",
-        "Isabella - Voz Clara (Multilingual)": "it-IT-IsabellaNeural",
-        "Antonio - Voz Profissional (Brasileiro)": "pt-BR-AntonioNeural",
-        "Francisca - Voz Natural (Brasileira)": "pt-BR-FranciscaNeural",
-        "Brenda - Voz Expressiva (Brasileira)": "pt-BR-BrendaNeural"
+        "Antonio - Voz Masculina Profissional": "pt-BR-AntonioNeural",
+        "Francisca - Voz Feminina Natural": "pt-BR-FranciscaNeural",
+        "Brenda - Voz Feminina Jovem": "pt-BR-BrendaNeural",
+        "Donato - Voz Masculina Madura": "pt-BR-DonatoNeural",
+        "Thalita - Voz Feminina Suave": "pt-BR-ThalitaNeural"
+    },
+    "🌍 Vozes Multilíngue": {
+        "Alessio - Italiano (Multilíngue)": "it-IT-AlessioMultilingualNeural",
+        "Andrew - Inglês Americano (Multilíngue)": "en-US-AndrewMultilingualNeural",
+        "Emma - Inglês Americano (Multilíngue)": "en-US-EmmaMultilingualNeural",
+        "Ava - Inglês Americano (Multilíngue)": "en-US-AvaMultilingualNeural"
+    },
+    "🇺🇸 Inglês": {
+        "Jenny - Voz Feminina Americana": "en-US-JennyNeural",
+        "Guy - Voz Masculina Americana": "en-US-GuyNeural"
     }
 }
 
