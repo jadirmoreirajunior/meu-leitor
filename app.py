@@ -13,12 +13,8 @@ from datetime import datetime
 import pdfplumber
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
-import base64
 from pathlib import Path
-import json
-from typing import List, Dict, Optional, Tuple
-import threading
-from concurrent.futures import ThreadPoolExecutor
+from typing import List, Dict, Optional
 import time
 
 # --- CONFIGURAÇÃO PROFISSIONAL ---
@@ -61,42 +57,31 @@ st.markdown("""
         box-shadow: 0 15px 30px rgba(0,0,0,0.1);
     }
     
-    .voice-selector {
-        background: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 2px solid #667eea;
-    }
-    
-    .progress-container {
-        background: #f0f2f6;
-        border-radius: 10px;
-        padding: 1rem;
-    }
-    
     .stats-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 1rem;
         margin: 1rem 0;
     }
     
     .stat-card {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
         padding: 1.5rem;
         border-radius: 12px;
         text-align: center;
+        border: 1px solid rgba(255, 255, 255, 0.3);
     }
     
     .stat-number {
         font-size: 2rem;
         font-weight: bold;
-        color: #667eea;
+        color: white;
     }
     
     .stat-label {
         font-size: 0.9rem;
-        color: #666;
+        color: rgba(255, 255, 255, 0.9);
         margin-top: 0.5rem;
     }
     
@@ -120,25 +105,19 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
     }
     
-    .custom-audio {
-        background: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
-    }
-    
-    .text-input-custom {
-        border: 2px solid #667eea;
-        border-radius: 10px;
-        padding: 1rem;
-    }
-    
     .chapter-list {
         max-height: 400px;
         overflow-y: auto;
         background: #f8f9fa;
         padding: 1rem;
         border-radius: 10px;
+    }
+    
+    .success-message {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -149,7 +128,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 TEMP_DIR = Path(tempfile.mkdtemp())
 
-# --- VOZES EXPANDIDAS ---
+# --- VOZES EXPANDIDAS (CORRIGIDAS) ---
 VOICES = {
     "🇧🇷 Português": {
         "Antonio (Masculino - Neutro)": "pt-BR-AntonioNeural",
@@ -184,7 +163,8 @@ VOICES = {
     }
 }
 
-# --- CONFIGURAÇÕES DE ÁUDIO ---
+# --- CONFIGURAÇÕES DE ÁUDIO CORRIGIDAS ---
+# Os valores agora estão no formato correto para edge-tts
 AUDIO_SETTINGS = {
     "Velocidade": {
         "Muito Lenta (0.5x)": "-50%",
@@ -194,11 +174,11 @@ AUDIO_SETTINGS = {
         "Muito Rápida (1.5x)": "+50%"
     },
     "Tom": {
-        "Mais Grave (-20%)": "-20%",
-        "Levemente Grave (-10%)": "-10%",
-        "Normal": "+0%",
-        "Levemente Agudo (+10%)": "+10%",
-        "Mais Agudo (+20%)": "+20%"
+        "Mais Grave (-20Hz)": "-20Hz",
+        "Levemente Grave (-10Hz)": "-10Hz",
+        "Normal (0Hz)": "+0Hz",
+        "Levemente Agudo (+10Hz)": "+10Hz",
+        "Mais Agudo (+20Hz)": "+20Hz"
     }
 }
 
@@ -208,16 +188,7 @@ def normalize_filename(text: str) -> str:
     text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
     text = re.sub(r'[^\w\s-]', '', text).strip()
     text = re.sub(r'[-\s]+', '_', text)
-    return text[:100]  # Limita tamanho
-
-def get_audio_duration(audio_path: str) -> float:
-    """Estima duração do áudio baseado no tamanho do arquivo"""
-    try:
-        size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-        # Estimativa aproximada: 1MB ≈ 1 minuto para MP3 de qualidade média
-        return size_mb * 60
-    except:
-        return 0
+    return text[:100]
 
 def format_duration(seconds: float) -> str:
     """Formata duração em formato legível"""
@@ -232,52 +203,18 @@ def format_duration(seconds: float) -> str:
     else:
         return f"{secs}s"
 
-# --- SISTEMA DE LOG ---
-class ProcessingLog:
-    def __init__(self):
-        self.logs = []
-        self.start_time = None
-    
-    def start(self):
-        self.start_time = time.time()
-        self.logs = []
-    
-    def add(self, message: str, level: str = "info"):
-        timestamp = time.time() - self.start_time if self.start_time else 0
-        self.logs.append({
-            "timestamp": f"{timestamp:.1f}s",
-            "message": message,
-            "level": level
-        })
-    
-    def get_stats(self) -> Dict:
-        if not self.start_time:
-            return {}
-        elapsed = time.time() - self.start_time
-        return {
-            "total_time": format_duration(elapsed),
-            "total_operations": len(self.logs),
-            "errors": len([l for l in self.logs if l["level"] == "error"]),
-            "warnings": len([l for l in self.logs if l["level"] == "warning"])
-        }
-
-processing_log = ProcessingLog()
-
-# --- PROCESSAMENTO DE TEXTO AVANÇADO ---
+# --- CLASSE DE PROCESSAMENTO DE TEXTO ---
 class TextProcessor:
     @staticmethod
     def clean_professional_text(pages: List[str]) -> str:
-        """Limpeza profissional de texto com múltiplas estratégias"""
+        """Limpeza profissional de texto"""
         if not pages:
             return ""
-        
-        processing_log.add("Iniciando limpeza profissional de texto")
         
         all_lines = []
         for page in pages:
             all_lines.extend([line.strip() for line in page.split('\n') if line.strip()])
         
-        # Detecta padrões de ruído
         line_counts = Counter(all_lines)
         total_pages = len(pages)
         
@@ -286,7 +223,7 @@ class TextProcessor:
         repeated_noise = {line for line, count in line_counts.items() 
                          if count > threshold and len(line) < 100 and not line.isdigit()}
         
-        # Remove números de página isolados
+        # Remove números de página
         page_numbers = {line for line in all_lines 
                        if re.match(r'^\d{1,4}$', line) and line_counts[line] > 2}
         
@@ -301,22 +238,18 @@ class TextProcessor:
             for line in page_lines:
                 clean_line = line.strip()
                 
-                # Pula linhas de ruído
                 if clean_line in noise_patterns:
                     continue
                 
-                # Pula URLs
                 if re.match(r'https?://', clean_line):
                     continue
                 
-                # Pula linhas muito curtas que parecem numeração
                 if re.match(r'^[ivxlcdm]{1,5}[\.\)]?\s*$', clean_line.lower()):
                     continue
                 
-                # Controle de linhas vazias consecutivas
                 if not clean_line:
                     consecutive_empty += 1
-                    if consecutive_empty > 2:  # Máximo 2 linhas vazias
+                    if consecutive_empty > 2:
                         continue
                 else:
                     consecutive_empty = 0
@@ -327,20 +260,17 @@ class TextProcessor:
             if final_page_lines:
                 cleaned_text_list.append("\n".join(final_page_lines))
         
-        processing_log.add(f"Limpeza concluída: {len(all_lines)} linhas processadas")
         return "\n\n".join(cleaned_text_list)
     
     @staticmethod
     def detect_chapters(text: str) -> List[Dict]:
-        """Detecção inteligente de capítulos com múltiplos padrões"""
-        processing_log.add("Detectando estrutura de capítulos")
-        
+        """Detecção inteligente de capítulos"""
         # Padrões de capítulo
         patterns = [
             r'\n\s*(?:Capítulo|Chapter|CAPÍTULO|CAPITULO)\s+(\d+|[IVXLCDM]+)\b',
             r'\n\s*(?:Parte|Part|PARTE)\s+(\d+|[IVXLCDM]+)\b',
-            r'\n\s*(\d+)\s*\n\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]',  # Número de capítulo simples
-            r'\n\s*([IVXLCDM]+)\s*\n',  # Numeração romana
+            r'\n\s*(\d+)\s*\n\s*[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]',
+            r'\n\s*([IVXLCDM]+)\s*\n',
         ]
         
         all_matches = []
@@ -349,17 +279,15 @@ class TextProcessor:
             all_matches.extend(matches)
         
         if len(all_matches) >= 2:
-            # Ordena por posição e remove duplicatas próximas
             all_matches.sort(key=lambda x: x.start())
             unique_matches = []
             last_pos = -1000
             
             for match in all_matches:
-                if match.start() - last_pos > 100:  # Evita duplicatas próximas
+                if match.start() - last_pos > 100:
                     unique_matches.append(match)
                     last_pos = match.start()
             
-            # Extrai conteúdo dos capítulos
             chapters = []
             for i, match in enumerate(unique_matches):
                 start = match.start()
@@ -368,7 +296,7 @@ class TextProcessor:
                 title = match.group(0).strip()
                 content = text[start:end].strip()
                 
-                if len(content) > 50:  # Filtra capítulos muito curtos
+                if len(content) > 50:
                     chapters.append({
                         "title": title,
                         "content": content,
@@ -376,16 +304,13 @@ class TextProcessor:
                     })
             
             if len(chapters) >= 3:
-                processing_log.add(f"{len(chapters)} capítulos detectados")
                 return chapters
         
-        # Fallback: divisão por tamanho
-        processing_log.add("Usando divisão por tamanho (capítulos não detectados)")
         return TextProcessor.split_by_size(text)
     
     @staticmethod
     def split_by_size(text: str, max_chars: int = 4000) -> List[Dict]:
-        """Divide texto em partes de tamanho similar respeitando parágrafos"""
+        """Divide texto em partes de tamanho similar"""
         paragraphs = text.split('\n\n')
         chunks = []
         current_chunk = ""
@@ -415,30 +340,28 @@ class TextProcessor:
         
         return chunks
 
-# --- SISTEMA DE EXTRAÇÃO ---
+# --- CLASSE DE EXTRAÇÃO DE DOCUMENTOS ---
 class DocumentExtractor:
     @staticmethod
     def extract_from_pdf(file) -> List[str]:
-        """Extração otimizada de PDF"""
-        processing_log.add("Extraindo conteúdo do PDF")
+        """Extração de PDF"""
         pages_content = []
         
-        with pdfplumber.open(file) as pdf:
-            total_pages = len(pdf.pages)
-            for i, page in enumerate(pdf.pages):
-                text = page.extract_text()
-                if text:
-                    pages_content.append(text)
-                if (i + 1) % 10 == 0:
-                    processing_log.add(f"PDF: {i+1}/{total_pages} páginas processadas")
+        try:
+            with pdfplumber.open(file) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        pages_content.append(text)
+        except Exception as e:
+            st.error(f"Erro ao extrair PDF: {str(e)}")
+            return []
         
-        processing_log.add(f"PDF extraído: {total_pages} páginas")
         return pages_content
     
     @staticmethod
     def extract_from_epub(file) -> List[str]:
-        """Extração robusta de EPUB"""
-        processing_log.add("Extraindo conteúdo do EPUB")
+        """Extração de EPUB"""
         pages_content = []
         
         with tempfile.NamedTemporaryFile(delete=False, suffix='.epub') as tmp_file:
@@ -449,10 +372,9 @@ class DocumentExtractor:
             book = epub.read_epub(tmp_path)
             items = list(book.get_items_of_type(ITEM_DOCUMENT))
             
-            for i, item in enumerate(items):
+            for item in items:
                 try:
                     soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    # Remove scripts e estilos
                     for script in soup(["script", "style"]):
                         script.decompose()
                     text = soup.get_text()
@@ -460,90 +382,54 @@ class DocumentExtractor:
                         pages_content.append(text)
                 except:
                     continue
-                
-                if (i + 1) % 5 == 0:
-                    processing_log.add(f"EPUB: {i+1}/{len(items)} seções processadas")
-            
-            processing_log.add(f"EPUB extraído: {len(pages_content)} seções com conteúdo")
+        except Exception as e:
+            st.error(f"Erro ao extrair EPUB: {str(e)}")
         finally:
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         
         return pages_content
     
     @staticmethod
     def extract_from_txt(file) -> str:
-        """Extração de texto puro com detecção de encoding"""
-        processing_log.add("Extraindo conteúdo do TXT")
-        
+        """Extração de TXT com detecção de encoding"""
         content = file.getvalue()
-        # Tenta diferentes encodings
+        
         for encoding in ['utf-8', 'latin-1', 'cp1252']:
             try:
                 return content.decode(encoding)
             except:
                 continue
         
-        # Fallback
-        processing_log.add("Usando encoding padrão com substituição de caracteres", "warning")
         return content.decode('utf-8', errors='replace')
 
-# --- SISTEMA DE NARRAÇÃO ---
-class Narrator:
-    def __init__(self, voice_id: str, rate: str = "+0%", pitch: str = "+0%"):
-        self.voice_id = voice_id
-        self.rate = rate
-        self.pitch = pitch
-        self.log = []
-    
-    async def narrate_chunk(self, text: str, output_path: str, chunk_info: Dict) -> Dict:
-        """Narra um chunk de texto com configurações personalizadas"""
-        try:
-            communicate = edge_tts.Communicate(
-                text,
-                self.voice_id,
-                rate=self.rate,
-                pitch=self.pitch
-            )
-            
-            await communicate.save(output_path)
-            
-            # Estima duração
-            duration = get_audio_duration(output_path)
-            
-            return {
-                "success": True,
-                "path": output_path,
-                "title": chunk_info.get("title", "Unknown"),
-                "duration": duration,
-                "size_mb": os.path.getsize(output_path) / (1024 * 1024)
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "title": chunk_info.get("title", "Unknown"),
-                "error": str(e)
-            }
-    
-    async def narrate_chapters(self, chapters: List[Dict], output_dir: str, 
-                              progress_callback=None) -> List[Dict]:
-        """Narra múltiplos capítulos com controle de progresso"""
-        results = []
-        
-        for i, chapter in enumerate(chapters):
-            if progress_callback:
-                progress_callback(i + 1, len(chapters), chapter["title"])
-            
-            clean_name = normalize_filename(chapter["title"])
-            filename = f"{i+1:03d}_{clean_name}.mp3"
-            output_path = os.path.join(output_dir, filename)
-            
-            result = await self.narrate_chunk(chapter["content"], output_path, chapter)
-            results.append(result)
-            
-            # Pequena pausa para evitar throttling
-            await asyncio.sleep(0.5)
-        
-        return results
+# --- FUNÇÃO PRINCIPAL DE NARRAÇÃO ---
+async def narrate_text(text: str, voice_id: str, rate: str, pitch: str, output_path: str):
+    """Função assíncrona para narração com parâmetros corretos"""
+    try:
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice_id,
+            rate=rate,
+            pitch=pitch
+        )
+        await communicate.save(output_path)
+        return True
+    except Exception as e:
+        st.error(f"Erro na narração: {str(e)}")
+        return False
+
+def run_narration(text: str, voice_id: str, rate: str, pitch: str, output_path: str):
+    """Wrapper síncrono para narração assíncrona"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(
+            narrate_text(text, voice_id, rate, pitch, output_path)
+        )
+        return result
+    finally:
+        loop.close()
 
 # --- INTERFACE PRINCIPAL ---
 def main():
@@ -571,24 +457,24 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Sidebar profissional
+    # Sidebar
     with st.sidebar:
         st.markdown("### 📁 Upload de Arquivo")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            input_method = st.radio(
-                "Método de entrada",
-                ["📄 Arquivo", "✍️ Texto Manual"],
-                key="input_method"
-            )
+        input_method = st.radio(
+            "Método de entrada",
+            ["📄 Arquivo", "✍️ Texto Manual"],
+            key="input_method",
+            help="Escolha como deseja fornecer o texto"
+        )
         
         if input_method == "📄 Arquivo":
             uploaded_file = st.file_uploader(
                 "Selecione o documento",
-                type=["pdf", "epub", "txt", "mobi"],
-                help="Formatos suportados: PDF, EPUB, TXT, MOBI"
+                type=["pdf", "epub", "txt"],
+                help="Formatos suportados: PDF, EPUB, TXT"
             )
+            manual_text = ""
         else:
             uploaded_file = None
             manual_text = st.text_area(
@@ -601,7 +487,6 @@ def main():
         st.markdown("---")
         st.markdown("### 🎤 Configurações de Voz")
         
-        # Seletor de voz por categoria
         language_category = st.selectbox(
             "Idioma / Categoria",
             list(VOICES.keys()),
@@ -614,7 +499,6 @@ def main():
             help="Escolha a voz neural para narração"
         )
         
-        # Configurações avançadas de áudio
         with st.expander("⚙️ Configurações Avançadas de Áudio"):
             speed = st.select_slider(
                 "Velocidade de Narração",
@@ -625,269 +509,235 @@ def main():
             pitch = st.select_slider(
                 "Tom de Voz",
                 options=list(AUDIO_SETTINGS["Tom"].keys()),
-                value="Normal"
+                value="Normal (0Hz)"
             )
             
             st.info("💡 Ajuste a velocidade e tom para personalizar a narração")
         
-        # Preview de voz
+        # Preview de voz (agora com tratamento de erro)
         if st.button("🔊 Testar Voz", use_container_width=True):
-            with st.spinner("Gerando preview..."):
-                preview_text = "Olá! Esta é uma demonstração da voz selecionada para seu audiobook."
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
+            if st.session_state.get('preview_generated', False):
                 preview_path = TEMP_DIR / "preview.mp3"
-                loop.run_until_complete(
-                    edge_tts.Communicate(
-                        preview_text,
-                        VOICES[language_category][voice_name],
-                        rate=AUDIO_SETTINGS["Velocidade"][speed],
-                        pitch=AUDIO_SETTINGS["Tom"][pitch]
-                    ).save(str(preview_path))
-                )
-                loop.close()
-                
-                st.audio(str(preview_path))
+                if preview_path.exists():
+                    st.audio(str(preview_path))
+            else:
+                with st.spinner("Gerando preview..."):
+                    try:
+                        preview_text = "Olá! Esta é uma demonstração da voz selecionada para seu audiobook."
+                        preview_path = TEMP_DIR / "preview.mp3"
+                        
+                        success = run_narration(
+                            preview_text,
+                            VOICES[language_category][voice_name],
+                            AUDIO_SETTINGS["Velocidade"][speed],
+                            AUDIO_SETTINGS["Tom"][pitch],
+                            str(preview_path)
+                        )
+                        
+                        if success and preview_path.exists():
+                            st.audio(str(preview_path))
+                            st.session_state.preview_generated = True
+                        else:
+                            st.error("Falha ao gerar preview. Verifique a conexão com a internet.")
+                    except Exception as e:
+                        st.error(f"Erro ao gerar preview: {str(e)}")
         
         st.markdown("---")
         
-        # Controles
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🗑️ Resetar", use_container_width=True):
-                if OUTPUT_DIR.exists():
-                    shutil.rmtree(OUTPUT_DIR)
-                OUTPUT_DIR.mkdir()
-                st.cache_data.clear()
-                st.rerun()
-        
-        with col2:
-            if st.button("ℹ️ Ajuda", use_container_width=True):
-                st.info("""
-                **Formatos Suportados:**
-                - PDF (com extração de texto)
-                - EPUB (e-books)
-                - TXT (texto puro)
-                - MOBI (em desenvolvimento)
-                
-                **Limitações:**
-                - Máximo recomendado: 500 páginas
-                - Tempo de processamento: ~2min/página
-                """)
+        if st.button("🗑️ Resetar Sistema", use_container_width=True):
+            if OUTPUT_DIR.exists():
+                shutil.rmtree(OUTPUT_DIR)
+            OUTPUT_DIR.mkdir()
+            if TEMP_DIR.exists():
+                shutil.rmtree(TEMP_DIR)
+            TEMP_DIR.mkdir()
+            st.session_state.clear()
+            st.rerun()
 
     # Área principal
-    tab1, tab2, tab3 = st.tabs(["📚 Processamento", "📊 Estatísticas", "📝 Log"])
+    st.markdown("### 📚 Processamento do Documento")
     
-    with tab1:
-        # Verifica se tem conteúdo para processar
-        has_content = False
-        
-        if input_method == "📄 Arquivo" and uploaded_file:
-            has_content = True
-        elif input_method == "✍️ Texto Manual" and 'manual_text' in locals() and len(manual_text.strip()) > 50:
-            has_content = True
-            # Cria um "arquivo virtual" para processamento uniforme
-            uploaded_file = io.BytesIO(manual_text.encode('utf-8'))
-            uploaded_file.name = "texto_manual.txt"
-        
-        if has_content:
-            # Inicializa estado se necessário
-            if 'processed_chunks' not in st.session_state or \
-               st.session_state.get('last_file') != uploaded_file.name:
-                
-                with st.spinner("🔍 Analisando documento..."):
-                    processing_log.start()
-                    
-                    # Extrai conteúdo
-                    if uploaded_file.name.endswith('.pdf'):
-                        pages = DocumentExtractor.extract_from_pdf(uploaded_file)
+    # Verifica se tem conteúdo para processar
+    has_content = False
+    current_file = None
+    
+    if input_method == "📄 Arquivo" and uploaded_file:
+        has_content = True
+        current_file = uploaded_file
+    elif input_method == "✍️ Texto Manual" and len(manual_text.strip()) > 50:
+        has_content = True
+        # Cria um arquivo virtual para processamento uniforme
+        current_file = io.BytesIO(manual_text.encode('utf-8'))
+        current_file.name = "texto_manual.txt"
+    
+    if has_content:
+        # Processamento do arquivo
+        if 'processed_chunks' not in st.session_state or \
+           st.session_state.get('last_file') != current_file.name:
+            
+            with st.spinner("🔍 Analisando documento..."):
+                try:
+                    # Extrai conteúdo baseado no tipo de arquivo
+                    if current_file.name.endswith('.pdf'):
+                        pages = DocumentExtractor.extract_from_pdf(current_file)
                         full_text = TextProcessor.clean_professional_text(pages)
-                    elif uploaded_file.name.endswith('.epub'):
-                        pages = DocumentExtractor.extract_from_epub(uploaded_file)
+                    elif current_file.name.endswith('.epub'):
+                        pages = DocumentExtractor.extract_from_epub(current_file)
                         full_text = TextProcessor.clean_professional_text(pages)
-                    elif uploaded_file.name.endswith('.txt') or uploaded_file.name == "texto_manual.txt":
-                        full_text = DocumentExtractor.extract_from_txt(uploaded_file)
+                    elif current_file.name.endswith('.txt') or current_file.name == "texto_manual.txt":
+                        full_text = DocumentExtractor.extract_from_txt(current_file)
                     else:
                         st.error("❌ Formato não suportado")
                         return
                     
                     if full_text and len(full_text) > 50:
                         st.session_state.processed_chunks = TextProcessor.detect_chapters(full_text)
-                        st.session_state.last_file = uploaded_file.name
+                        st.session_state.last_file = current_file.name
                         st.session_state.full_text = full_text
-                        st.session_state.processing_log = processing_log
                     else:
                         st.error("❌ Não foi possível extrair texto suficiente do documento")
                         return
+                except Exception as e:
+                    st.error(f"Erro no processamento: {str(e)}")
+                    return
+        
+        chunks = st.session_state.get('processed_chunks', [])
+        
+        if chunks:
+            # Métricas
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📄 Partes/Capítulos", len(chunks))
+            with col2:
+                total_chars = sum(len(c['content']) for c in chunks)
+                st.metric("📝 Caracteres Totais", f"{total_chars:,}")
+            with col3:
+                estimated_time = total_chars / 1000 * 0.5  # 0.5 min por 1000 caracteres
+                st.metric("⏱️ Tempo Estimado", f"{estimated_time:.1f} min")
+            with col4:
+                avg_chars = total_chars / len(chunks) if chunks else 0
+                st.metric("📊 Média por Parte", f"{avg_chars:.0f} chars")
             
-            chunks = st.session_state.get('processed_chunks', [])
+            # Estrutura detectada
+            with st.expander("📋 Estrutura Detectada", expanded=True):
+                st.markdown('<div class="chapter-list">', unsafe_allow_html=True)
+                for i, chunk in enumerate(chunks, 1):
+                    preview = chunk['content'][:200] + "..." if len(chunk['content']) > 200 else chunk['content']
+                    st.markdown(f"""
+                    **{i}. {chunk['title']}**  
+                    📏 {len(chunk['content']):,} caracteres  
+                    📝 *{preview}*  
+                    ---
+                    """)
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            if chunks:
-                # Métricas do documento
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("📄 Partes/Capítulos", len(chunks))
-                with col2:
-                    total_chars = sum(len(c['content']) for c in chunks)
-                    st.metric("📝 Caracteres Totais", f"{total_chars:,}")
-                with col3:
-                    estimated_time = total_chars / 1000  # Estimativa aproximada
-                    st.metric("⏱️ Tempo Estimado", f"{estimated_time:.0f} min")
-                with col4:
-                    avg_chars = total_chars / len(chunks) if chunks else 0
-                    st.metric("📊 Média por Parte", f"{avg_chars:.0f} chars")
+            # Botão de narração
+            if st.button("🎬 Iniciar Narração Profissional", use_container_width=True):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # Preview da estrutura
-                with st.expander("📋 Estrutura Detectada", expanded=True):
-                    st.markdown('<div class="chapter-list">', unsafe_allow_html=True)
-                    for i, chunk in enumerate(chunks, 1):
-                        preview = chunk['content'][:200] + "..." if len(chunk['content']) > 200 else chunk['content']
-                        st.markdown(f"""
-                        **{i}. {chunk['title']}**  
-                        📏 {len(chunk['content']):,} caracteres  
-                        📝 *{preview}*  
-                        ---
-                        """)
-                    st.markdown('</div>', unsafe_allow_html=True)
+                start_time = time.time()
                 
-                # Botão de narração
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    if st.button("🎬 Iniciar Narração Profissional", use_container_width=True):
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        time_text = st.empty()
-                        
-                        start_time = time.time()
-                        
-                        # Configura narrador
-                        narrator = Narrator(
+                for i, chunk in enumerate(chunks):
+                    progress = (i + 1) / len(chunks)
+                    progress_bar.progress(progress)
+                    
+                    elapsed = time.time() - start_time
+                    remaining = (elapsed / (i + 1)) * (len(chunks) - i - 1) if i > 0 else 0
+                    
+                    status_text.markdown(f"""
+                    🎙️ **Narrando:** {chunk['title']}  
+                    ⏱️ **Progresso:** {i+1}/{len(chunks)} - Tempo restante: {format_duration(remaining)}
+                    """)
+                    
+                    # Narra o chunk
+                    clean_name = normalize_filename(chunk['title'])
+                    fname = f"{i+1:03d}_{clean_name}.mp3"
+                    path = OUTPUT_DIR / fname
+                    
+                    try:
+                        success = run_narration(
+                            chunk['content'],
                             VOICES[language_category][voice_name],
                             AUDIO_SETTINGS["Velocidade"][speed],
-                            AUDIO_SETTINGS["Tom"][pitch]
+                            AUDIO_SETTINGS["Tom"][pitch],
+                            str(path)
                         )
                         
-                        # Narra capítulos
-                        results = []
-                        for i, chunk in enumerate(chunks):
-                            progress = (i + 1) / len(chunks)
-                            progress_bar.progress(progress)
-                            
-                            elapsed = time.time() - start_time
-                            remaining = (elapsed / (i + 1)) * (len(chunks) - i - 1) if i > 0 else 0
-                            
-                            status_text.text(f"🎙️ Narrando: {chunk['title']}")
-                            time_text.text(f"⏱️ Tempo restante estimado: {format_duration(remaining)}")
-                            
-                            # Narra o chunk
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            
-                            clean_name = normalize_filename(chunk['title'])
-                            fname = f"{i+1:03d}_{clean_name}.mp3"
-                            path = OUTPUT_DIR / fname
-                            
-                            loop.run_until_complete(
-                                narrator.narrate_chunk(
-                                    chunk['content'],
-                                    str(path),
-                                    chunk
-                                )
-                            )
-                            loop.close()
-                            
-                            if path.exists():
-                                results.append({
-                                    "title": chunk['title'],
-                                    "path": str(path),
-                                    "size": os.path.getsize(path)
-                                })
-                        
-                        progress_bar.progress(1.0)
-                        status_text.text("✅ Narração concluída!")
-                        
-                        total_time = time.time() - start_time
-                        time_text.text(f"⏱️ Tempo total: {format_duration(total_time)}")
-                        
-                        st.session_state.narration_results = results
-                        st.session_state.narration_complete = True
+                        if not success:
+                            st.error(f"Falha ao narrar: {chunk['title']}")
+                    except Exception as e:
+                        st.error(f"Erro ao narrar {chunk['title']}: {str(e)}")
                 
-                # Download após narração
-                if st.session_state.get('narration_complete'):
-                    st.success("✨ Audiobook gerado com sucesso!")
+                progress_bar.progress(1.0)
+                total_time = time.time() - start_time
+                
+                # Verifica se arquivos foram gerados
+                mp3_files = list(OUTPUT_DIR.glob("*.mp3"))
+                
+                if mp3_files:
+                    status_text.markdown(f"""
+                    <div class="success-message">
+                    ✅ **Narração concluída com sucesso!**  
+                    ⏱️ Tempo total: {format_duration(total_time)}  
+                    📁 {len(mp3_files)} arquivos gerados
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    # Cria ZIP
+                    # Cria ZIP para download
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for file_path in OUTPUT_DIR.glob("*.mp3"):
+                        for file_path in sorted(OUTPUT_DIR.glob("*.mp3")):
                             zf.write(file_path, file_path.name)
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            "📥 Baixar Audiobook Completo (ZIP)",
-                            zip_buffer.getvalue(),
-                            f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                            "application/zip",
-                            use_container_width=True
-                        )
+                    # Botão de download
+                    st.download_button(
+                        "📥 Baixar Audiobook Completo (ZIP)",
+                        zip_buffer.getvalue(),
+                        f"audiobook_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        "application/zip",
+                        use_container_width=True
+                    )
                     
-                    with col2:
-                        # Player individual
-                        st.markdown("### 🎵 Preview dos Arquivos")
-                        mp3_files = sorted(OUTPUT_DIR.glob("*.mp3"))
-                        if mp3_files:
-                            selected_file = st.selectbox(
-                                "Selecione o capítulo para preview:",
-                                mp3_files,
-                                format_func=lambda x: x.name
-                            )
-                            if selected_file:
-                                st.audio(str(selected_file))
-    
-    with tab2:
-        if 'narration_results' in st.session_state:
-            st.markdown("### 📊 Estatísticas da Narração")
-            
-            results = st.session_state.narration_results
-            total_size = sum(r['size'] for r in results) / (1024 * 1024)
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("🎵 Arquivos Gerados", len(results))
-            with col2:
-                st.metric("💾 Tamanho Total", f"{total_size:.1f} MB")
-            with col3:
-                if 'processing_log' in st.session_state:
-                    stats = st.session_state.processing_log.get_stats()
-                    st.metric("⚡ Tempo Processamento", stats.get('total_time', 'N/A'))
-            
-            # Tabela de arquivos
-            st.markdown("### 📁 Arquivos Gerados")
-            data = []
-            for r in results:
-                data.append({
-                    "Título": r['title'],
-                    "Tamanho": f"{r['size'] / (1024*1024):.2f} MB",
-                    "Arquivo": os.path.basename(r['path'])
-                })
-            st.dataframe(data, use_container_width=True)
-        else:
-            st.info("As estatísticas aparecerão aqui após a narração")
-    
-    with tab3:
-        st.markdown("### 📝 Log de Processamento")
-        if 'processing_log' in st.session_state:
-            for log in st.session_state.processing_log.logs:
-                if log['level'] == 'error':
-                    st.error(f"[{log['timestamp']}] {log['message']}")
-                elif log['level'] == 'warning':
-                    st.warning(f"[{log['timestamp']}] {log['message']}")
+                    # Preview dos arquivos
+                    st.markdown("### 🎵 Preview dos Arquivos Gerados")
+                    selected_file = st.selectbox(
+                        "Selecione o capítulo para preview:",
+                        sorted(mp3_files),
+                        format_func=lambda x: x.name
+                    )
+                    if selected_file:
+                        st.audio(str(selected_file))
                 else:
-                    st.text(f"[{log['timestamp']}] {log['message']}")
-        else:
-            st.info("O log de processamento aparecerá aqui")
+                    status_text.error("❌ Nenhum arquivo foi gerado. Verifique sua conexão com a internet.")
+    else:
+        st.info("👆 Faça o upload de um arquivo ou digite um texto manualmente para começar")
+        
+        # Cards de instrução
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+            <div class="feature-card">
+            <h3>📄 Upload de Arquivos</h3>
+            <p>Suporta PDF, EPUB e TXT. Arraste e solte ou clique para selecionar.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div class="feature-card">
+            <h3>✍️ Texto Manual</h3>
+            <p>Digite ou cole qualquer texto para converter em áudio instantaneamente.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+            <div class="feature-card">
+            <h3>🎤 Vozes Premium</h3>
+            <p>20+ vozes neurais em 5 idiomas com qualidade profissional.</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 # --- RODAPÉ ---
 st.markdown("---")
