@@ -1,8 +1,5 @@
 streamlit
 edge-tts
-mutagen
 pdfplumber
 EbookLib
 beautifulsoup4
-Pillow
-requests
